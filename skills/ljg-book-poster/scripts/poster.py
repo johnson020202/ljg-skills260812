@@ -36,7 +36,7 @@ CODE_HINT = {
     "TOP-TIGHT": "首块贴顶：画布顶部留 32–48px",
     "C-CONTRAST": "对比度不足：提高明度差，别只靠色相区分",
     "L-FIXED": "fixed/sticky 元素在整页截图中会重复：改用 static",
-    "T-SMALL-CENSUS": "小字过多：合并或删减低价值元信息",
+    "T-MIN-FONT": "任何文字不得小于 32 CSS px：放大字号、重排或精简，含来源与图注",
 }
 
 
@@ -45,7 +45,11 @@ def compact_report(audit: dict) -> tuple[str, int]:
     c = audit["counts"]
     lines = []
     lines.append(f"PAGE   {p['width']}x{p['height']} css (overflow={p['scrollWidth'] > p['width'] + 2})  sections={len(audit['sections'])}")
-    lines.append(f"TEXT   nodes={audit['textNodes']}  under24px={audit['smallText']}")
+    min_font = f"{audit['minFontPx']:g}px" if audit["minFontPx"] is not None else "n/a"
+    lines.append(
+        f"TEXT   nodes={audit['textNodes']}  generated={audit['generatedTextNodes']}  "
+        f"minFont={min_font}  under{audit['fontFloorPx']}px={audit['under32px']}"
+    )
     lines.append(f"ISSUES P1={c['1']} P2={c['2']} P3={c['3']}")
     if audit["issues"]:
         lines.append("")

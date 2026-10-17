@@ -16,9 +16,15 @@
   };
 
   const visible = (el) => {
-    if (!el) return false;
-    const cs = getComputedStyle(el);
-    return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > 0.05;
+    if (!el || el.closest('[data-export-ignore]')) return false;
+    if (getComputedStyle(el).visibility !== 'visible') return false;
+    let opacity = 1;
+    for (let e = el; e; e = e.parentElement) {
+      const cs = getComputedStyle(e);
+      opacity *= Number(cs.opacity);
+      if (cs.display === 'none' || cs.contentVisibility === 'hidden' || opacity <= 0) return false;
+    }
+    return true;
   };
 
   const parseColor = (c) => {
@@ -57,7 +63,7 @@
   const seen = new Set();
   const add = (sev, code, msg, el, extra) => {
     const s = selOf(el);
-    const key = code + '|' + s + '|' + Math.round((extra && extra.y) || 0);
+    const key = code + '|' + s + '|' + ((extra && extra.pseudo) || '') + '|' + Math.round((extra && extra.y) || 0);
     if (seen.has(key)) return;
     seen.add(key);
     issues.push(Object.assign({ sev, code, msg, selector: s }, extra || {}));
@@ -104,7 +110,15 @@
     }
   });
 
-  // ---------- walk text nodes ----------
+  // ---------- walk rendered text nodes ----------
+  const lineRects = (node) => {
+    const r = document.createRange();
+    r.selectNodeContents(node);
+    return [...r.getClientRects()]
+      .filter((rr) => rr.height > 0 && rr.width > 0)
+      .map((rr) => ({ top: Math.round(rr.top + scrollY0), left: rr.left, right: rr.right, w: rr.width }));
+  };
+
   const walker = document.createTreeWalker(poster, NodeFilter.SHOW_TEXT);
   const nodes = [];
   let n;
@@ -113,16 +127,26 @@
     if (!t || !t.trim()) continue;
     const el = n.parentElement;
     if (!el || !visible(el)) continue;
+    const rects = lineRects(n);
+    if (!rects.length) continue;
     const cs = getComputedStyle(el);
-    nodes.push({ node: n, el, cs, text: t });
+    nodes.push({ node: n, el, cs, text: t, rects });
   }
 
-  const lineRects = (node) => {
-    const r = document.createRange();
-    r.selectNodeContents(node);
-    return [...r.getClientRects()]
-      .filter((rr) => rr.height > 2 && rr.width > 0)
-      .map((rr) => ({ top: Math.round(rr.top + scrollY0), left: rr.left, right: rr.right, w: rr.width }));
+  const fontFloorPx = 32;
+  const fontSizes = [];
+  let under32px = 0;
+  let generatedTextNodes = 0;
+  const checkFont = (el, cs, text, pseudo = '') => {
+    const size = parseFloat(cs.fontSize);
+    if (!Number.isFinite(size)) return;
+    fontSizes.push(size);
+    if (size >= fontFloorPx) return;
+    under32px++;
+    const r = rectOf(el);
+    const section = (sectionInfo.find((s) => r.y >= s.y - 2 && r.y < s.bottom) || {}).name || '';
+    add(1, 'T-MIN-FONT', `计算字号 ${size}px < ${fontFloorPx}px：${text.trim().slice(0, 24)}`, el,
+      { y: r.y, section, fontSizePx: size, pseudo });
   };
 
   // Find the unit that follows a numeric text node: a following text node, or an
@@ -189,9 +213,8 @@
     return { chars: count, sampled: pts.length };
   };
 
-  nodes.forEach(({ node, el, cs, text }) => {
-    const rects = lineRects(node);
-    if (!rects.length) return;
+  nodes.forEach(({ node, el, cs, text, rects }) => {
+    checkFont(el, cs, text);
     const fontSize = parseFloat(cs.fontSize) || 0;
     const parentSize = parseFloat(getComputedStyle(el.parentElement).fontSize) || fontSize;
     const trimmed = text.trim();
@@ -250,10 +273,17 @@
     }
   });
 
-  // ---------- small text census ----------
-  const smallNodes = nodes.filter((o) => parseFloat(o.cs.fontSize) < 24);
-  if (smallNodes.length > 16) {
-    add(3, 'T-SMALL-CENSUS', `小于 24px 的文字共 ${smallNodes.length} 处（规范要求严格少用）`, smallNodes[0].el, { y: rectOf(smallNodes[0].el).y });
+  // Generated labels and counters are not DOM text nodes.
+  for (const el of [poster, ...poster.querySelectorAll('*')]) {
+    if (!visible(el)) continue;
+    for (const pseudo of ['::before', '::after']) {
+      const cs = getComputedStyle(el, pseudo);
+      const content = cs.content.trim();
+      if (!content || /^(none|normal|""|'')$/.test(content) || /^url\(/.test(content)) continue;
+      if (cs.display === 'none' || cs.visibility !== 'visible' || Number(cs.opacity) <= 0) continue;
+      generatedTextNodes++;
+      checkFont(el, cs, content, pseudo);
+    }
   }
 
   // ---------- fixed / sticky ----------
@@ -276,7 +306,10 @@
     sections: sectionInfo.map((s) => ({ index: s.index, name: s.name, y: Math.round(s.y), h: Math.round(s.h), bottom: Math.round(s.bottom) })),
     counts,
     issues: issues.slice(0, 80),
-    smallText: smallNodes.length,
+    fontFloorPx,
+    minFontPx: fontSizes.length ? Math.min(...fontSizes) : null,
+    under32px,
+    generatedTextNodes,
     textNodes: nodes.length,
   };
 })()
