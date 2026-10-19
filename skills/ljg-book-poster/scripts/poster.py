@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from PIL import Image  # noqa: E402
 
+Image.MAX_IMAGE_PIXELS = None  # long posters by design, not a bomb attack
+
 import render_png  # noqa: E402
 from contact_sheet import from_sections, overview  # noqa: E402
 

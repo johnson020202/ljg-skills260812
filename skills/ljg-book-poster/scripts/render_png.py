@@ -29,6 +29,13 @@ import threading
 import time
 from pathlib import Path
 
+from PIL import Image as _PILImage
+
+# Long posters routinely exceed PIL's 179M-pixel "decompression bomb" guard
+# (a 1440x30000 CSS page at 2x is ~173M px; taller pages trip it). The pixels
+# are ours — raise the cap.
+_PILImage.MAX_IMAGE_PIXELS = None
+
 SLICE_CSS = 6000  # CSS px per CDP capture; well under Chrome's 16384 device-px cap
 AUDIT_JS = Path(__file__).with_name("audit.js")
 
@@ -40,6 +47,10 @@ def find_chromium() -> str | None:
         "/usr/bin/chromium",
         "/usr/bin/chromium-browser",
         "/usr/bin/google-chrome",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
     ):
         if candidate and Path(candidate).exists():
             return candidate
