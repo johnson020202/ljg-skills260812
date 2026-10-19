@@ -133,16 +133,17 @@
     nodes.push({ node: n, el, cs, text: t, rects });
   }
 
-  const fontFloorPx = 32;
+  // Font floor is a hard user rule: nothing visible may be smaller than 70 CSS px.
+  const fontFloorPx = 70;
   const fontSizes = [];
-  let under32px = 0;
+  let underFloorPx = 0;
   let generatedTextNodes = 0;
   const checkFont = (el, cs, text, pseudo = '') => {
     const size = parseFloat(cs.fontSize);
     if (!Number.isFinite(size)) return;
     fontSizes.push(size);
     if (size >= fontFloorPx) return;
-    under32px++;
+    underFloorPx++;
     const r = rectOf(el);
     const section = (sectionInfo.find((s) => r.y >= s.y - 2 && r.y < s.bottom) || {}).name || '';
     add(1, 'T-MIN-FONT', `计算字号 ${size}px < ${fontFloorPx}px：${text.trim().slice(0, 24)}`, el,
@@ -308,7 +309,7 @@
     issues: issues.slice(0, 80),
     fontFloorPx,
     minFontPx: fontSizes.length ? Math.min(...fontSizes) : null,
-    under32px,
+    underFloorPx,
     generatedTextNodes,
     textNodes: nodes.length,
   };
