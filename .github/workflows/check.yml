@@ -33,8 +33,16 @@ jobs:
           else
             python scripts/setup.py
           fi
-      - name: Run source and Markdown distribution checks
-        run: python scripts/check.py --format all
+      - name: Run checks for the branch format
+        shell: bash
+        env:
+          CHECK_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if [[ "$CHECK_BRANCH" == "md" ]]; then
+            python scripts/check.py
+          else
+            python scripts/check.py --format all
+          fi
       - name: Preserve check results
         if: always()
         uses: actions/upload-artifact@v4
