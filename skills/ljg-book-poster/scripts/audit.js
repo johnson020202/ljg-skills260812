@@ -232,11 +232,13 @@
       add(2, 'T-GIANT', `整句被放大到 ${Math.round(fontSize)}px（应只放大 1 个关键词）：${trimmed.slice(0, 18)}…`, el, { y: r0.y, section });
     }
 
-    // widow: last line 1-2 chars only, in body-ish copy
-    if (rects.length >= 2 && trimmed.length >= 8 && fontSize <= 64) {
+    // widow / orphan tail: a wrapped line ending in 1 char (any length) or
+    // 2 chars in body copy. Chinese typography forbids a lone last char.
+    // fontSize cap 110 keeps hero keywords out; the 70px floor replaced the old 64.
+    if (rects.length >= 2 && fontSize <= 110) {
       const li = lastLineChars(node);
-      if (li && li.chars <= 2) {
-        add(2, 'T-WIDOW', `末行只有 ${li.chars} 个字（孤字）：${trimmed.slice(-12)}`, el, { y: rects[rects.length - 1].top, section });
+      if (li && (li.chars <= 1 && trimmed.length >= 2 || li.chars === 2 && trimmed.length >= 8)) {
+        add(2, 'T-WIDOW', `末行只剩 ${li.chars} 个字（孤字行）：${trimmed.slice(-12)}`, el, { y: rects[rects.length - 1].top, section });
       }
     }
 

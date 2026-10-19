@@ -41,7 +41,7 @@ user_invocable: true
 |---|---|---|
 | `T-UNIT-WRAP` | 数字与单位被拆到两行（如 `−13` / `分`） | 数字+单位包一层 `white-space:nowrap` |
 | `T-KEY-BREAK` | 强调词被折成两行 | 关键词 `display:inline-block` 并留出空间 |
-| `T-WIDOW` | 末行只剩 1–2 字 | 改 `max-width` 或改写句子 |
+| `T-WIDOW` | 孤字行：折行文本末行只剩 1 字（任意长度）或正文末行 2 字 | 全局 `text-wrap:pretty`；加宽容器/`white-space:nowrap`，或改写句子回缩上一行 |
 | `T-OVERFLOW` / `H-OVERFLOW` | 文字或画布横向溢出 | 查固定宽度子元素 |
 | `T-GIANT` | 整句被放大 >80px | 只保留 1 个关键词放大 |
 | `BOTTOM-VOID` | 底部大空白 | 主容器写死了高度 |
@@ -93,6 +93,8 @@ python3 scripts/contact_sheet.py out.png --out sheet.png          # 只需总览
 4. **所有文字至少 70 CSS px**，包括英文、标签、图注、来源、页码、数字单位与生成编号。这是用户设定的硬下限，audit 的 `T-MIN-FONT` 按 70px 判定 P1，低于 70px 一律不许交付。正文优先 70–110px；空间不够时精简、换行、改布局或增加高度，绝不能缩字塞内容。
 5. **字体按角色混排，一册使用 5–10 款开源字体**。默认字体库（均为可自由嵌入再分发的开源许可；运行 `scripts/fetch_fonts.sh` 可下载校验好的字体到 `assets/fonts/`）：霞鹜文楷 Regular/Medium（SIL OFL，正文与标题）、得意黑斜体 Smiley Sans Oblique（SIL OFL，书名/大词/序号）、汇文明朝体 Huiwen-mincho（CC0，引文/古典段落）、霞鹜新晰黑 LXGW Neo XiHei（IPA Font License，现代无衬线辅助）、霞鹜马克黑 LXGW Marker Gothic（SIL OFL，趣味强调）。按书的题材选 5–10 款并给每款分配明确角色，同一角色不混用。字体文件复制到本册 `fonts/` 目录，用相对路径 `@font-face` 嵌入（渲染器本地HTTP服务会加载）；`font-display:block` + `document.fonts.ready` 保证字体就绪后才截图。不得改用未授权、未安装或需要联网 CDN 的字体。
 5a. **图内不写来源署名与制作说明**。"据作者官网整理""本图不改写为教条口号""示例为转写不是逐字对话""关于这一版/字体署名"这类元信息一律不进图；来源边界、归属区分、许可记录写进 sources.md 与 verification.json，供复查不进成品。图内只保留书本身的内容与必要的版本信息（书名、作者、译者）。
+5b. **禁止孤字行（中文排版习惯）**：任何折行的文本，最后一行只剩一个字就不合格——要么把上一行稍微缩回去，要么改写句子。全局启用 `text-wrap:pretty`（有帮助但非保证，CJK 连续字它可能救不回）；固定宽度容器（词标签、序号列）加 `white-space:nowrap` 并预留足够列宽；最终以 audit 的 `T-WIDOW` 渲染后逐节点检测为准，交付前必须为 0。
+
 6. **最终 PNG 可以到约 30000px 高**。默认 2x 导出时约为 15000 CSS px，内容自然撑高，不写固定高度凑长度。新增高度用于大字、图解、留白、转场与精选模块，不等于增加观点数量。
 7. 一句话的字号反差，只放大其中 **1 个最关键的词或短语**。其余文字保持正常阅读字号。
 8. 区域编号 `01 / 02 / 03 ...` 要足够大，成为构图元素。
