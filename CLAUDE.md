@@ -1,113 +1,34 @@
-# CLAUDE.md
+# Repository guide
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This fork is `johnson020202/ljg-skills260812`. The original author attribution and MIT license remain unchanged. Current installation, dependency, and verification instructions are in `README.md`.
 
-## Overview
+## Layout
 
-This is a personal Claude Code skills repository. Each skill is a self-contained directory that can be installed to `~/.claude/skills/` to extend Claude Code's capabilities.
+- `skills/ljg-*/SKILL.md`: self-contained skill definitions and invocation contracts.
+- Each skill owns its `Tools/`, `scripts/`, `assets/`, references, and regression tests as applicable.
+- `.claude-plugin/`: collection metadata; plugin, marketplace, and plugin-entry versions must agree.
+- `scripts/setup.py`: checkout-local dependency and browser setup.
+- `scripts/check.py`: repository contracts, syntax checks, and all checked-in test suites; `--format all` also checks a complete generated Markdown distribution.
+- `scripts/build_format.py`: offline, input-preserving format builds into a new directory; the format-neutral `fix-ljg-org-to-md` skill uses this entrypoint.
+- `.github/workflows/check.yml`: Linux and macOS validation.
 
-## Repository Structure
+The README inventory is checked against all actual skill directories. Do not use a separate hardcoded skill list here.
 
-```
-ljg-skills/
-├── ljg-*/              # Each skill is a directory with "ljg-" prefix
-│   ├── SKILL.md        # Skill definition with YAML frontmatter
-│   ├── references/     # Reference docs for complex skills
-│   ├── assets/         # Templates, images, scripts
-│   └── scripts/        # Helper scripts (bash, node)
-├── README.md
-└── .gitignore          # Ignores everything except ljg-*/ and specific files
-```
+## Development commands
 
-## Skill Format
+Run from the repository root:
 
-Each `SKILL.md` follows this structure:
-
-```yaml
----
-name: skill-name
-description: "What this skill does. Use when user says..."
-user_invocable: true|false
-version: "x.x.x"
----
-
-# Skill content in markdown...
+```sh
+python3 scripts/setup.py
+python3 scripts/check.py --format all
 ```
 
-## Skill Inventory
+`python3 scripts/check.py --static` is a limited syntax/contract check, not a replacement for regression tests. Detailed results are in `.cache/check-results.json`.
 
-| Skill | Purpose | External Dependencies |
-|-------|---------|----------------------|
-| `ljg-card` | Content → PNG visuals (long cards, infographs, posters) | Node.js + Playwright |
-| `ljg-paper` | Academic paper analysis pipeline | None |
-| `ljg-plain` | Plain language rewriter | None |
-| `ljg-word` | English word deep-dive | None |
-| `ljg-writes` | Writing engine for thinking through ideas | None |
+Bun modules use their own frozen lockfiles. The Python renderer uses `skills/ljg-book-poster/requirements.txt` in the checkout `.venv`. Test browsers are isolated under `.cache/ms-playwright`; different Playwright versions require matching browser revisions.
 
-## Commands
+## Outputs and installation
 
-### Install ljg-card Dependencies
+Skill tools must be resolved from the actual loaded skill directory; installations may be global or project-local. Follow each skill's output contract rather than assuming all outputs belong in Downloads or all notes use the same format.
 
-`ljg-card` requires Playwright for screenshot capture:
-
-```bash
-cd ljg-card && npm install && npx playwright install chromium
-```
-
-### Install Skills (for users)
-
-```bash
-# Copy all skills to Claude Code
-mkdir -p ~/.claude/skills
-cp -r ljg-* ~/.claude/skills/
-```
-
-## Architecture Notes
-
-### Skill Invocation
-
-- Skills with `user_invocable: true` can be triggered via `/skill-name` or natural language
-- Trigger phrases are defined in each skill's `description` field
-- Skills can call other skills via the Skill tool
-
-### Content Processing Pipeline
-
-Several skills share a common pattern for content ingestion:
-- **URL** → WebFetch
-- **File path** → Read tool
-- **Raw text** → Direct use
-
-### ljg-card Architecture
-
-The most complex skill with multiple rendering modes:
-
-1. **HTML Templates**: Stored in `assets/` (long_template.html, infograph_template.html, poster_template.html)
-2. **Capture Script**: `assets/capture.js` uses Playwright to screenshot HTML → PNG
-3. **Reference Docs**: `references/taste.md` (design guidelines), `references/mode-*.md` (mode-specific instructions)
-4. **Output**: PNG files written to `~/Downloads/`
-
-### Shared Conventions
-
-**Org-mode output** (ljg-paper, ljg-plain, ljg-writes):
-- Bold: `*text*` (single asterisk, not `**`)
-- Filenames: `{timestamp}--{title}__{type}.org`
-- Output directory: `~/Documents/notes/`
-- Timestamps: `date +%Y%m%dT%H%M%S`
-
-**ASCII Art**:
-- Allowed: `+ - | / \ > < v ^ * = ~ . : # [ ] ( ) _ , ; ! ' "`
-- Forbidden: Unicode box-drawing characters
-
-## Development Guidelines
-
-- Skills are atomic units—each skill directory is self-contained
-- Version numbers are manually maintained in SKILL.md frontmatter
-- The `.gitignore` ignores all files by default; explicitly unignore with `!pattern`
-- When modifying skill logic, update both the SKILL.md and any referenced files in `references/`
-
-## Testing Changes
-
-After modifying a skill:
-1. Copy to `~/.claude/skills/`
-2. Restart Claude Code to reload skills
-3. Test via natural language trigger or `/skill-name`
+Repository verification does not copy skills to the user's installation or publish a release. The publishing skill has separate identity, clean-worktree, and explicit branch safeguards. `master` is the source branch; `md` is a generated release branch, not a safe location for untracked manual patches.

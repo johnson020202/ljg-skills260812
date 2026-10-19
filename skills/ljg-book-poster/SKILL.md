@@ -21,7 +21,7 @@ user_invocable: true
   ↓ 交付 PNG
 ```
 
-**总预算是 3 轮渲染。** 第 4 轮起说明你在猜。渲染本身只要约 10 秒，贵的是每轮之后的读图和返工。
+**总预算是 3 轮渲染。** 第 4 轮起说明你在猜。渲染耗时随页面、倍率和机器变化；使用输出的 `captureSeconds` / `auditSeconds` 记录实测，不承诺固定秒数。
 
 ## 性能铁律（这两条是历史上最贵的教训）
 
@@ -35,7 +35,7 @@ user_invocable: true
 
 ### 2. 排版问题交给 audit，不要用眼睛找
 
-`:code` 输出里的 P1/P2/P3 已经覆盖了历史上所有真实 bug：
+输出里的 P1/P2/P3 覆盖以下可程序验证的排版问题；不替代内容核对与视觉验收：
 
 | 代码 | 含义 | 处理 |
 |---|---|---|
@@ -62,16 +62,18 @@ python3 ~/.agents/skills/ljg-book-poster/scripts/poster.py book.html --outdir ou
 
 | 文件 | 用途 |
 |---|---|
-| `out/book.png` | 最终长图，默认 2880px 宽（1440 CSS × 2） |
+| `out/book.png` | 最终长图，默认 1080px 宽（1440 CSS × 0.75）；显式 `--scale 2` 为 2880px |
 | `out/book-sheet.png` | **先读这个**：所有区块竖排总览 |
 | `out/book-overview.png` | 3 列平铺总览，查节奏与重复感 |
-| `out/book-thumb.png` | 手机宽度缩略图，查"一眼能否分清层级" |
+| `out/book-thumb.png` | 独立 QA 缩略图，`--thumb-width` 默认 440px，不决定最终 PNG 宽度 |
 | `out/book-sections/*.png` | 按区块命名的裁图，需要放大细节时读 |
 | `out/book-audit.json` | 完整审计数据（含区块 y/h、`minFontPx`、`underFloorPx`） |
 
 退出码：`0` = 无 P1；`1` = 有 P1 必须修；`2` = 渲染失败。
 
-单独渲染（不审计）或换参数：
+两个 CLI 均默认 `--width 1440 --scale 0.75`。最终像素为 `floor(CSS 尺寸 × scale)`；自定义 1560 CSS 宽时 0.75 输出 1170px，不自动变成 1080。不要用 `--width 1080` 或 CSS transform 代替输出倍率。
+
+单独渲染（仍运行审计；JSON 文件按需输出）或显式高清档：
 
 ```bash
 python3 scripts/render_png.py book.html out.png --width 1440 --scale 2
@@ -80,10 +82,14 @@ python3 scripts/contact_sheet.py out.png --out sheet.png          # 只需总览
 
 ## 渲染器为什么可靠（不要绕开它）
 
-- **一次浏览器启动**，`networkidle` + `document.fonts.ready` 后直接 CDP 截图，不滚动、不分页。
-- **切片按 CSS 像素裁切**，每片 6000 CSS px，远低于 Chrome 约 16384 设备像素的单张上限；`clip.scale=2` 由 Chrome 原生渲染，清晰度与 `device_scale_factor=2` 相同（已实测边缘锐度一致）。
-- 切片与单张整页截图**逐像素一致**，不存在接缝。
-- 页面再长也不会触发「压缩 + 黑带」问题——那正是旧版 `full_page=True` 在 >16384px 时的故障。
+- **一次浏览器启动、一次 DOM audit**，固定布局视口；字体状态和图片 decode 明确成功后才截图。lazy 图片主动加载，加载/状态/解码错误退出 2，不发布错误页或替代字体成品。
+- **每次截图高、宽不超过 12000 设备 px**，按 `scale` 换算且对齐 CSS/设备坐标。默认 0.75x 为 16000 CSS px，2x 为 6000 CSS px，3x 为 4000 CSS px；这是保守预算，不是所有浏览器的普适极限。最终主图最多 1.6 亿像素，超出明确拒绝。
+- 仅截主图分片，拼接完成后所有 sections 从主图裁切；manifest 记录实际 `cropPixels`，sheet 按当前 manifest 顺序生成，overview 等比例缩放。
+- PNG 解码验收和全部派生图成功后才发布。POSIX 用单一 `current` 指针切换到新 generation，公共 CLI 文件名不变（符号链接）；交付应复制解引用后的 PNG。Windows 用普通文件／目录、`msvcrt` 单 writer 锁、私有 staging 和备份，在普通异常时逆序回滚，不要求管理员或 symlink 权限。Windows 不是多文件同时可见或 crash/断电原子事务，读取应等待发布结束；恢复失败会保留并报告备份，后续写入拒绝直到人工恢复。跨卷产物组合、未知文件、输入别名、非自有链接／reparse point 一律拒绝。
+- 输出目录内 `.poster-*` 为模块拥有的 staging/generation/锁。以下单指针说明仅适用于 POSIX：首次迁移旧普通文件/章节目录时先保留 `legacy-*`，异常回滚；首次别名安装非多路径同时可见。后续完整 `poster.py` 发布单指针切换；多文件读取/复制应在发布完成后进行，跨提交的多次读取不保证快照一致性。旧 generation 成功后回收，不要在渲染同时读取它或手工删除当前 generation。仅 `render_png.py` 重跑时未请求的旧可选产物保留，不代表已重新生成。
+- 本地 HTTP 只绑定 loopback，线程化处理、有读取超时且关闭不等待空闲连接。自动渲染禁止外网资源，全部内容依赖须本地化；手动导出库仅在用户按按钮后加载。
+- 优先遵守 `CHROMIUM_PATH`（无效路径立即失败）；设置 `PLAYWRIGHT_BROWSERS_PATH` 时使用 Playwright 配套浏览器，不自动切换系统 Chrome。否则按平台发现系统浏览器，Windows 从 `ProgramFiles` / `ProgramFiles(x86)` / `LOCALAPPDATA` 查找 Chrome/Edge。
+- JSON、审计源码和 CLI stdout/stderr 使用 UTF-8。QA 标签优先系统 CJK 字体，Windows 包括 `WINDIR/Fonts/msyh.ttc`，缺失时回退随仓文楷；不分发系统字体。Windows 原生运行以专门 CI 的真实结果为准，不把 macOS mock 测试称作 Windows 实跑。
 
 ## 硬规则
 
@@ -95,9 +101,10 @@ python3 scripts/contact_sheet.py out.png --out sheet.png          # 只需总览
 5a. **图内不写来源署名与制作说明**。"据作者官网整理""本图不改写为教条口号""示例为转写不是逐字对话""关于这一版/字体署名"这类元信息一律不进图；来源边界、归属区分、许可记录写进 sources.md 与 verification.json，供复查不进成品。图内只保留书本身的内容与必要的版本信息（书名、作者、译者）。
 5b. **禁止孤字行（中文排版习惯）**：任何折行的文本，最后一行只剩一个字就不合格——要么把上一行稍微缩回去，要么改写句子。全局启用 `text-wrap:pretty`（有帮助但非保证，CJK 连续字它可能救不回）；固定宽度容器（词标签、序号列）加 `white-space:nowrap` 并预留足够列宽；最终以 audit 的 `T-WIDOW` 渲染后逐节点检测为准，交付前必须为 0。
 
-6. **最终 PNG 可以到约 30000px 高**。默认 2x 导出时约为 15000 CSS px，内容自然撑高，不写固定高度凑长度。新增高度用于大字、图解、留白、转场与精选模块，不等于增加观点数量。
+6. **最终 PNG 可以到约 30000px 高**。默认 0.75x 导出时约为 40000 CSS px（显式 2x 时约 15000 CSS px），内容自然撑高，不写固定高度凑长度。新增高度用于大字、图解、留白、转场与精选模块，不等于增加观点数量。
 7. 一句话的字号反差，只放大其中 **1 个最关键的词或短语**。其余文字保持正常阅读字号。
 8. 区域编号 `01 / 02 / 03 ...` 要足够大，成为构图元素。
+8a. **同一章节标题组合只留一次章号**：大号 `01` 旁不得再写“第 1 章”。副标签用英文主题词（如 SWARM MIND），形成数字／英文／中文三层；无大号数字时，竖排“01 章”可作唯一编号。英文标签仍受 70 CSS px 下限约束。目录和正文的对应编号、正文数据／年份、行动清单不属于重复章号。使用 `.sec-head` 或 `data-chapter-heading` 标记标题组合，以 `.sec-num` / `data-chapter-number` 标记大编号；常见标题／kicker 中重复章号由 `T-CHAPTER-DUP` 作 P2 提示，复杂自定义结构／counter 仍人工复核，不能将无提示等同全图已验证。
 9. 尽量取消硬直角矩形。卡片、网格、大章节块统一使用完整圆角。
 10. 大章节块上下必须有留白，四个圆角完整露出；相邻大块之间不能贴死。
 11. 配色允许大胆，但**对比度优先于漂亮**。禁止低明度差、低色相差造成的难读组合。
@@ -308,7 +315,7 @@ async function exportPNG() {
   try {
     const node = document.getElementById('poster');
     const canvas = await html2canvas(node, {
-      scale: 2,
+      scale: 0.75,
       useCORS: true,
       backgroundColor: getComputedStyle(node).backgroundColor,
       logging: false,
@@ -326,11 +333,11 @@ async function exportPNG() {
 </script>
 ```
 
-自动化最终 PNG 一律使用 `scripts/poster.py`。
+上面的 CDN 片段仅说明手动导出接口；实际母版使用 `assets/poster-skeleton.html` 的按钮点击后延迟加载方式，不在自动截图时请求 CDN。自动化最终 PNG 一律使用 `scripts/poster.py`。
 
 ## 最终 QA
 
-`poster.py` 已自动完成：溢出、孤字、强调词折行、数字单位断行、整句放大、对比度、区块间距、贴边、底部空白、fixed 元素、70px 字号硬下限检查。字号按浏览器计算值核验，覆盖可见文本及 `::before` / `::after` 生成文字；隐藏内容与导出工具不计入。报告中的 `minFont` 必须 ≥70px，`underFloorPx` 必须为 0。
+`poster.py` 自动检查文本 Range 与祖先 overflow 裁剪区、跨内联节点和尾部空白的末行孤字、强调词折行、数字单位断行、整句放大、对比度、间距、底部空白、fixed 元素及 70px 下限。孤字没有大标题字号豁免；正文两字尾行仍作 P2 提醒。字号计入祖先 transform / scale / zoom 的最小二维尺度，覆盖 `::before` / `::after` / 原生 `::marker`；隐藏内容与导出工具不计入。`minFont` 必须 ≥70px，`underFloorPx=0`。复杂透视、非矩形 clip-path、视觉遮挡和审美仍需人工检查。
 
 剩下这些**必须靠人眼读图**判断，用 `*-sheet.png` + `*-thumb.png` 各一次即可：
 
@@ -343,6 +350,7 @@ async function exportPNG() {
 ### 看字
 - 书名、作者、英文、副标题是否正确
 - 有无错字、漏字、乱码
+- **汇文字形 QA（凡用汇文明朝体必做）**：风险字集合 `让药继赞钟钥认讲论证铁` 来自 v3.3.0 分支经验，不是所有版本的字形证明。audit 的 `huiwenReview` 从可见文本／生成文字中筛选请求 Huiwen/汇文/匯文字体的候选；自定义字体别名用 `data-glyph-review="huiwen"` 标记该段。字体声明与逐字实际 fallback 不等同，报告明确为 `manual-review-required`，零候选也不表示所有字形正确。按本册固定字体文件，取候选与新增字符渲成 **120px 字符网格**逐字目检，再核对成品实际字形。仅对应字体段落受该清单约束，其他字体不全局禁字。引文、书名、人名和术语不得自动改写，优先为该段换合规字体；摘要文案改写须语义不变。不要把“钥匙→入口”等例子当机械替换表，也不宣称其他字体永远无问题
 - 是否真正做到一句只突出一个关键词
 
 ## 失败处理
@@ -354,6 +362,9 @@ async function exportPNG() {
 | 最终 PNG 超出期望长度 | 先精简重复内容、调整节奏，不缩小到 70px 以下；约 30000 PNG px 在 2x 时约为 15000 CSS px，不是固定上限 |
 | Playwright 未安装 | `python3 -m pip install playwright pillow`，浏览器用系统 Chrome 即可 |
 | 需要超过 2x 的清晰度 | `--scale 3`（文件会显著变大，通常没必要） |
+| Windows 标签方框 | 检查雅黑或随仓文楷；Arial 能加载不代表含中文字形 |
+| PNG 超出像素预算 / Pillow 大图错误 | 保留 1.6 亿像素限制，降低导出倍率或精简内容，不设置全局 `Image.MAX_IMAGE_PIXELS = None` |
+| Windows 依赖下载受代理阻塞 | 先检查当前会话代理与网络；仅在确认失效代理后临时修正，不由渲染器修改全局代理／Git 配置 |
 
 **不要做的事：** 不要用 PDF 分页再拼 PNG；不要 `full_page=True` 截超长页（>16384 设备像素会压缩并出现黑带）；不要用猜的像素坐标手工裁图。
 
@@ -364,13 +375,17 @@ async function exportPNG() {
 1. 可点击下载的 PNG 链接
 2. 简短说明尺寸与视觉方向
 
+**默认交付 1080px 宽 PNG**：保持 1440 CSS 母版，仅将输出倍率设为 0.75；70 CSS px 的有效字号下限不变，输出的名义 em 约 52.5px。`--scale` 不进入 CSS 字号审计，CSS transform/zoom 缩字仍会被拦截。2880 高清档用 `--scale 2` 按需交付；文件体积不保证固定缩减比例。HTML 手动导出按钮同样默认 0.75，但不能替代自动渲染器的分片和 QA。
+
 用户需要时再补 HTML。
 
 永远不要只返回本地文件路径。必须提供真正可下载/可访问的文件链接或明确上传位置。
 
 ## 维护验证
 
-修改字号规则、模板或审计脚本后，运行 `python3 scripts/test_audit.py`。它在真实浏览器中验证 70px 通过、69px / 继承 / 相对单位小字被 P1 拦截、生成编号及隐藏内容处理，并检查骨架模板；依赖与渲染器相同。
+模块正式回归：`python3 -m unittest discover -s skills/ljg-book-poster/scripts -p 'test_*.py'`（仓库根运行）；在模块目录运行时 `-s scripts`。测试覆盖真实浏览器排版与字体加载、默认 1080 / 显式 2x / 自定义宽度、0.75 跨分片与 9000 CSS px 章节 2x/3x、分片像素/裁切一致性、旧章节、资源失败、URL 编码、UTF-8 输出、退出码、两种事务失败回滚/别名安全及本地服务阻塞。Windows 仅跳过 POSIX 专用 generation/symlink 测试与 `fetch_fonts.sh` 维护工具测试，真实渲染与 portable 事务测试照常执行。所有夹具使用自动清理的 tempdir，外部资源默认拒绝，不下载字体。
+
+直接依赖见本模块 `requirements.txt`（playwright 1.58.0 / Pillow 11.3.0；不是传递依赖完整锁）。使用项目隔离环境与对应 Playwright Chromium；本机可显式 `CHROMIUM_PATH` 覆盖。不得为了测试去安装全局依赖或运行已安装技能副本。
 
 ## 通用提示词
 

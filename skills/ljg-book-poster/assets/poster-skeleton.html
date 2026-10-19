@@ -52,7 +52,7 @@
     font-size:70px;
     color:var(--ink);
     -webkit-font-smoothing:antialiased;
-    /* KEEP: pretty wrapping avoids orphan single-char last lines (Chinese rule). */
+    /* KEEP: pretty helps CJK wrapping but is not a guarantee; audit T-WIDOW decides. */
     text-wrap:pretty;
   }
 
@@ -105,7 +105,9 @@
     margin:0 .10em;
   }
 
-  /* ---------- section head ---------- */
+  /* ---------- section head ----------
+     One chapter number per heading: do not add 第 N 章 beside .sec-num.
+     Use an English theme label instead; repeated map/body numbers are allowed. */
   .sec-head{display:flex;align-items:flex-end;gap:46px;margin-bottom:46px;}
   .sec-num{font-size:168px;line-height:.76;font-weight:700;letter-spacing:-.05em;color:var(--accent);}
   .sec-title{font-size:80px;font-weight:700;line-height:1.15;letter-spacing:.01em;}
@@ -138,6 +140,16 @@
   }
   .check h3{font-size:70px;font-weight:700;margin-bottom:10px;}
   .check p{font-size:70px;line-height:1.5;opacity:.88;}
+
+  /* Real visible roles, not only @font-face declarations. */
+  .sec-title,.card h3,.check h3{font-family:"LXGW WenKai Medium",sans-serif;font-weight:700;}
+  .book-title,.sec-num{font-family:"Smiley Sans Oblique",sans-serif;font-style:italic;font-weight:400;}
+  .book-title em{font-style:inherit;}
+  .kicker,.book-en{font-family:"LXGW Neo XiHei",sans-serif;font-weight:400;}
+  .k{font-family:"LXGW Marker Gothic",sans-serif;font-weight:400;}
+  /* Huiwen candidates 让药继赞钟钥认讲论证铁 need 120px-grid visual review.
+     audit lists candidates, not proven glyph shapes; never auto-rewrite quotations. */
+  .quote-pull,.ending{font-family:"Huiwen Mincho",serif;font-weight:400;}
 
   /* ---------- optional scene pieces (use what the book needs, delete the rest) ---------- */
   .chapter-map{display:grid;gap:22px;margin:36px 0;}
@@ -193,7 +205,7 @@
       <!-- Keep title <= 4 chars at 150px, or lower .book-title to 120px. -->
       <h1 class="book-title">书名<em>真相</em></h1>
       <div class="book-en">ENGLISH TITLE</div>
-      <div class="book-sub">一句能概括全书判断的话。</div>
+      <div class="book-sub">一句能概括全书判断的话，</div>
       <div class="book-author">作者</div>
     </div>
     <div aria-hidden="true"><!-- CSS/SVG motif only, no text --></div>
@@ -201,8 +213,8 @@
 
   <!-- 02 HOOK: one sentence, one giant word -->
   <section class="hook">
-    <div class="hook-line">你不是不够努力。</div>
-    <div class="hook-line">你只是<span class="k">带宽</span>被占满了。</div>
+    <div class="hook-line">你不是不够努力，</div>
+    <div class="hook-line">你只是<span class="k">带宽</span>被占满了，</div>
   </section>
 
   <!-- 03..0N CORE POINTS: vary the scene type each time -->
@@ -214,7 +226,7 @@
         <h2 class="sec-title">标题</h2>
       </div>
     </div>
-    <div class="main">主句，只有一个词放大。</div>
+    <div class="main">主句，只有一个词放大，</div>
   </section>
 
   <section class="sec-02">
@@ -238,13 +250,13 @@
       <div><div class="kicker">ACTION LIST</div><h2 class="sec-title">带走这几条</h2></div>
     </div>
     <ol>
-      <li><div><h3>行动一</h3><p>一句可执行的说明。</p></div></li>
-      <li><div><h3>行动二</h3><p>一句可执行的说明。</p></div></li>
+      <li><div><h3>行动一</h3><p>一句可执行的说明，</p></div></li>
+      <li><div><h3>行动二</h3><p>一句可执行的说明，</p></div></li>
     </ol>
   </section>
 
   <section class="ending">
-    <div class="main">结尾收束，回到一个可以带走的判断。</div>
+    <div class="main">结尾收束，回到一个可以带走的判断，</div>
   </section>
 
   <div class="tools" data-export-ignore>
@@ -253,15 +265,24 @@
 
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script>
+// Optional manual export only. Automated rendering stays entirely offline.
 async function exportPNG() {
+  if (!window.html2canvas) {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('Manual export library failed to load'));
+      document.head.appendChild(script);
+    });
+  }
   const tools = document.querySelector('[data-export-ignore]');
   if (tools) tools.style.display = 'none';
   try {
     const node = document.getElementById('poster');
     const canvas = await html2canvas(node, {
-      scale: 2,
+      scale: 0.75, // output sampling only; CSS width/font floor stay 1440/70
       useCORS: true,
       backgroundColor: getComputedStyle(node).backgroundColor,
       logging: false,

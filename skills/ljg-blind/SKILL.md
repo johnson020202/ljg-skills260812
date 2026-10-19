@@ -1,12 +1,12 @@
 ---
 name: ljg-blind
-description: 盲区扫描——读昨天你与 AI 的全部对话，照出暴露的思维盲区（不是不懂的知识，是让某类真相一直看不见的思维习惯），再从微信读书挑一本书的一章精准补上，落成一篇完整分析笔记。Use when user says '扫盲区', '盲区', '照盲区', '看看我的思维盲区', '我昨天想漏了什么', 'blind spot', 'ljg-blind', '/ljg-blind', or wants yesterday's AI conversations analyzed for cognitive blind spots plus a targeted weread chapter to fill them. 可选参数：传一个日期(YYYY-MM-DD)扫那天而非昨天。NOT FOR 纵向深钻一个观点（用 ljg-think）、一个领域降秩（用 ljg-rank）、陪读一篇文本（用 ljg-read）、找一个领域的约束（用 ljg-constraint）。
+description: 盲区扫描——从获授权且已支持的本地 AI 会话数据源读取昨天的真人文本，照出暴露的思维盲区（不是不懂的知识，是让某类真相一直看不见的思维习惯），再从微信读书挑一本书的一章精准补上，落成一篇完整分析笔记。Use when user says '扫盲区', '盲区', '照盲区', '看看我的思维盲区', '我昨天想漏了什么', 'blind spot', 'ljg-blind', '/ljg-blind', or wants yesterday's AI conversations analyzed for cognitive blind spots plus a targeted weread chapter to fill them. 可选参数：传一个日期(YYYY-MM-DD)扫那天而非昨天。NOT FOR 纵向深钻一个观点（用 ljg-think）、一个领域降秩（用 ljg-rank）、陪读一篇文本（用 ljg-read）、找一个领域的约束（用 ljg-constraint）。
 user_invocable: true
 ---
 
 # 盲区扫描
 
-读你昨天跟 AI 的全部对话，照出那个你自己看不见的思维盲区，从微信读书点亮补它的一章。
+读取已支持且获授权的数据源中昨天的真人文本，照出可能的思维盲区，从微信读书挑出补它的一章。不能把单一宿主的文本当作全部 AI 对话；材料不足就明确停止。
 
 ## 盲区是什么
 
@@ -32,45 +32,44 @@ user_invocable: true
 
 - **杠杆**——补上它，下一步打开的可能性最多。
 - **真盲**——是他自己看不见的，不是知道了在拖的。
-- **对位 mission**——贴 M0（找新取景框）/ M1（求本质）。盲区若正好挡在他的主线上，优先。读 `~/.claude/PAI/USER/TELOS/MISSION.md` 确认主线。
+- **对位当前目标**——若用户已在本次对话说明主线，优先选挡住这条主线的盲区；未提供时不假设个人 mission，也不读取作者专属配置。
 
 ---
 
 ## 操作步骤
 
-### 第一步 · 定日期
+### 第一步 · 确认宿主、目录和本地日期
+
+`{skill_dir}` 必须替换为本次实际加载的 `ljg-blind/SKILL.md` 所在绝对目录；项目级、全局和插件安装一律从此目录调用工具，不能回退旧全局副本。
+
+当前自动提取仅支持 **Claude Code** 的 `projects/<project>/<session>.jsonl`，不宣称覆盖所有 AI 宿主。先从当前宿主上下文确认：Codex、LCode、Cursor 等未支持时明确告知，不得因为磁盘上恰有 Claude 日志就暗换数据源；可降级分析用户主动提供的文本/兼容导出。
+
+Python 3.9+ 标准库工具默认使用本地昨天；用户传入 `YYYY-MM-DD` 时用 `--date`。时区默认取 `TZ` 或系统时区数据库，可用 `--timezone Asia/Shanghai` 明确指定。按本地日 `[00:00, 次日00:00)` 过滤，正确解析 `Z`/offset 和夏令时，并以同一时区输出时间；不能用 UTC 日期前缀比较。
+
+### 第二步 · 本地提取当天真人消息
+
+确认宿主和授权后运行（不上传、不调用 API、不写笔记）：
 
 ```bash
-# 默认昨天；用户传了 YYYY-MM-DD 就用那天（macOS BSD date）
-target=${1:-$(date -v-1d +%Y-%m-%d)}
+python3 "{skill_dir}/Tools/extract_conversations.py" --host claude-code
+# 指定日期、时区或用户明确提供的合成/导出数据根：
+python3 "{skill_dir}/Tools/extract_conversations.py" --host claude-code \
+  --date "YYYY-MM-DD" --timezone "Asia/Shanghai" --projects-root "/absolute/path/to/projects"
 ```
 
-### 第二步 · 捞当天的对话
+未传 `--projects-root` 时取 `$CLAUDE_CONFIG_DIR/projects`，否则取当前用户 `~/.claude/projects`。不含作者用户名或项目名；仅遍历项目顶层 JSONL，不递归 subagents/workflows，不跟随项目/日志符号链接。字符串与 text block 数组均支持；按角色、来源标记、工具块和消息外层系统包装在**整条消息边界**过滤。`isCompactSummary` / `isVisibleInTranscriptOnly` 等自动摘要标记一律排除；系统标签只认消息开头的外层包装，不搜索正文里的标签。真人问题中的 fenced code、引用和内联标签示例保留，不删词、不按行误杀。仅能报告读取到的真人纯文本，不把图片/附件或缺失宿主的内容说成已读。
 
-会话文件在 `~/.claude/projects/-Users-lijigang*/*.jsonl`，每行一条消息（type=user / assistant / system）。只要继刚的真人发言，滤掉工具回显和子 agent 噪声：
+stdout 是 JSON，包含本地时间区间、消息列表及可回查的相对来源行号；输出 >50KB 时分段读取，保留消息边界。不要把原始对话交给第三方服务或搜索请求。
+
+- `status=ok`：有至少 200 个非空白文字，可继续分析，但仍需具体证据。
+- `status=sparse` / `empty`：正常退出 0；明确写「当前数据源中当天对话稀薄 / 无可用真人文本」，停止盲区推断与选书，不能据此断言所有宿主当天都没对话。
+- 退出 2、stderr `status=error`：数据根不可用、无会话文件、不支持的宿主/格式、坏 JSON、无时区时间等。明确报错并停止，不能伪装成 empty；不输出部分对话冒充完整结果。Python 不可用时同样明确降级为用户提供文本。
+
+回归检查只运行合成 JSONL，不扫描真实会话：
 
 ```bash
-target=<上一步的日期>
-out=/tmp/ljg-blind-${target}.txt
-: > "$out"
-# 只取顶层会话文件（排除 subagents/workflows），只留真人纯文本
-for f in $(rg -l "\"timestamp\":\"${target}" ~/.claude/projects/-Users-lijigang*/ 2>/dev/null | grep -vE 'subagents/|workflows/'); do
-  jq -r 'select(.type=="user" and ((.timestamp // "") | startswith("'"${target}"'"))) |
-    (.message.content) as $c |
-    (if ($c|type)=="string" then $c
-     elif ($c|type)=="array" then ([$c[] | select(.type=="text") | .text] | join(" "))
-     else "" end) as $t |
-    select($t|length>0) |
-    "[" + (.timestamp|.[11:16]) + "] " + $t' "$f" 2>/dev/null >> "$out"
-done
-# 滤掉工具回显 / 系统噪声 / 本次调用请求自身
-grep -vE 'tool_use_id|system-reminder|caveat|Caveat|local-command|command-name|command-message|<task-notification>|ljg-blind|扫盲区' "$out" > "${out}.f" && mv "${out}.f" "$out"
-wc -c "$out"
+python3 -B -m unittest discover -s "{skill_dir}/Tools" -p 'test_*.py'
 ```
-
-材料若 >50KB，按对话分段读，先识别每段在讨论什么主题，再往下看。可辅助看几条相邻的 assistant 回复定上下文。
-
-**数据稀薄兜底**：当天真人输入 <200 字或没有对话——直接在输出里写明「当天对话稀薄 / 无」，**不强造盲区**。宁可交白卷，不许编。
 
 ### 第三步 · 读出盲区
 
@@ -107,7 +106,7 @@ curl -s -X POST https://i.weread.qq.com/api/agent/gateway \
 4. **构造网页版链接**——微信读书网页阅读器不接受裸 `bookId` / `chapterUid`，必须先编码。用技能自带工具生成：
 
 ```bash
-bun "${HOME}/.agents/skills/ljg-blind/Tools/WeReadWebUrl.ts" "<bookId>" "<chapterUid>"
+bun "{skill_dir}/Tools/WeReadWebUrl.ts" "<bookId>" "<chapterUid>"
 ```
 
 工具输出形如：
@@ -121,7 +120,7 @@ https://weread.qq.com/web/reader/{encodedBookId}k{encodedChapterUid}
 **兜底**：搜索全空 / 没对症章节 → 选整本相关书，只传 bookId 生成网页版书籍入口：
 
 ```bash
-bun "${HOME}/.agents/skills/ljg-blind/Tools/WeReadWebUrl.ts" "<bookId>"
+bun "{skill_dir}/Tools/WeReadWebUrl.ts" "<bookId>"
 ```
 
 文里说明为什么没能精准到章。

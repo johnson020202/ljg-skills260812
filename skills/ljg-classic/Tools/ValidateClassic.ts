@@ -3,6 +3,8 @@
 import { readdir } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, resolve } from "node:path";
 import {
+  annotationCoverage,
+  isPunctuationText,
   readHeroDataUri,
   readPngDimensions,
   renderHtml,
@@ -89,7 +91,7 @@ export interface ValidationSummary {
   height: number;
   tokenCount: number;
   annotationCount: number;
-  annotationCoverage: 1;
+  annotationCoverage: number;
   interpretationParagraphs: number;
   heroPresent: boolean;
   heroVisible: boolean;
@@ -188,7 +190,7 @@ function countSpec(spec: ClassicSpec): {
   toneCounts: Record<Tone, number>;
 } {
   const allTokens = spec.passages.flatMap(passage => passage.tokens);
-  const annotatedTokens = allTokens.filter(token => !token.punctuation);
+  const annotatedTokens = allTokens.filter(token => token.punctuation !== true);
   const toneCounts = annotatedTokens.reduce<Record<Tone, number>>(
     (counts, token) => {
       counts[token.tone!] += 1;
@@ -199,13 +201,12 @@ function countSpec(spec: ClassicSpec): {
   return {
     allTokens,
     annotatedTokens,
-    punctuationCount: allTokens.length - annotatedTokens.length,
+    punctuationCount: allTokens.filter(token => token.punctuation === true && isPunctuationText(token.text)).length,
     toneCounts,
   };
 }
 
 function validateComputedFontSizes(value: unknown, errors: string[]): void {
-  if (value === undefined) return; // schema v2 manifests rendered before font capture stay readable
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     errors.push("computed font sizes must be an object");
     return;
@@ -270,10 +271,8 @@ async function validateHtml(
     errors.push("HTML contains an unexpected hero");
   }
 
-  const currentManifest = manifest.dom?.originalMatches !== undefined
-    || manifest.dom?.fontSizes !== undefined
-    || manifest.qaSliceDetails !== undefined;
-  if (currentManifest) {
+  // The schema chooses the contract; deleting evidence never selects a weaker one.
+  if (manifest.schemaVersion === 2) {
     if (typeof manifest.width !== "number") errors.push("manifest width is required for deterministic HTML validation");
     else if (html !== renderHtml(spec, manifest.width, embeddedHeroDataUri)) {
       errors.push("HTML differs from deterministic renderer output");
@@ -399,6 +398,27 @@ async function validateSlices(
   return ordered;
 }
 
+function requireV2Fields(manifest: ClassicManifest, errors: string[]): void {
+  const fields = [
+    "schemaVersion", "renderedAt", "book", "chapter", "heroPresent", "heroVisible", "heroImagePath", "source",
+    "inputPath", "htmlPath", "pngPath", "manifestPath", "width", "height", "original", "originalChars",
+    "passageCount", "tokenCount", "punctuationCount", "annotationCount", "annotationCoverage", "toneCounts",
+    "interpretationParagraphs", "interpretationChars", "dom", "qaSlices", "qaSliceDetails", "sha256",
+  ];
+  const domFields = [
+    "documentHeight", "scrollWidth", "tokenCount", "annotationCount", "interpretationParagraphs", "overflowCount",
+    "clippedCount", "emptyTextCount", "titleVisible", "chapterVisible", "heroVisible", "interpretationVisible", "originalMatches", "fontSizes",
+  ];
+  const required = (object: unknown, names: string[], prefix: string) => {
+    if (!object || typeof object !== "object" || Array.isArray(object)) { errors.push(`${prefix} must be an object`); return; }
+    for (const name of names) if (!Object.hasOwn(object, name)) errors.push(`${prefix}.${name} is required for schemaVersion 2`);
+  };
+  required(manifest, fields, "manifest");
+  required(manifest.dom, domFields, "dom");
+  required(manifest.sha256, ["input", "html", "png", "hero"], "sha256");
+  if (!Array.isArray(manifest.qaSliceDetails)) errors.push("qaSliceDetails must be an array for schemaVersion 2");
+}
+
 export async function validateClassicArtifacts(options: ValidateOptions): Promise<ValidationSummary> {
   const resolvedOptions = {
     input: resolve(options.input),
@@ -407,11 +427,13 @@ export async function validateClassicArtifacts(options: ValidateOptions): Promis
   };
   const spec = validateSpec(await Bun.file(resolvedOptions.input).json());
   const manifest = await Bun.file(resolvedOptions.manifest).json() as ClassicManifest;
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("manifest must be an object");
   const dimensions = await readPngDimensions(resolvedOptions.png);
   const { allTokens, annotatedTokens, punctuationCount, toneCounts } = countSpec(spec);
   const errors: string[] = [];
 
   if (manifest.schemaVersion !== 2) errors.push(`manifest schemaVersion must be 2, got ${String(manifest.schemaVersion)}`);
+  requireV2Fields(manifest, errors);
   expectPath("inputPath", manifest.inputPath, resolvedOptions.input, errors);
   expectPath("pngPath", manifest.pngPath, resolvedOptions.png, errors);
   expectPath("manifestPath", manifest.manifestPath, resolvedOptions.manifest, errors);
@@ -422,7 +444,8 @@ export async function validateClassicArtifacts(options: ValidateOptions): Promis
   if (manifest.passageCount !== spec.passages.length) errors.push("passage count mismatch");
   if (manifest.tokenCount !== allTokens.length) errors.push("token count mismatch");
   if (manifest.punctuationCount !== punctuationCount) errors.push("punctuation count mismatch");
-  if (manifest.annotationCount !== annotatedTokens.length || manifest.annotationCoverage !== 1) {
+  const coverage = annotationCoverage(spec);
+  if (manifest.annotationCount !== annotatedTokens.length || coverage !== 1 || manifest.annotationCoverage !== coverage) {
     errors.push("annotation coverage mismatch");
   }
   const rawToneCounts = manifest.toneCounts as Partial<Record<Tone, unknown>> | undefined;
@@ -466,10 +489,10 @@ export async function validateClassicArtifacts(options: ValidateOptions): Promis
   if (manifest.dom?.overflowCount !== 0 || manifest.dom?.clippedCount !== 0 || manifest.dom?.emptyTextCount !== 0) {
     errors.push("DOM audit mismatch");
   }
-  if (!manifest.dom?.titleVisible || !manifest.dom?.chapterVisible || !manifest.dom?.interpretationVisible) {
+  if (manifest.dom?.titleVisible !== true || manifest.dom?.chapterVisible !== true || manifest.dom?.interpretationVisible !== true) {
     errors.push("required section not visible");
   }
-  if (manifest.dom?.originalMatches !== undefined && manifest.dom.originalMatches !== true) {
+  if (manifest.dom?.originalMatches !== true) {
     errors.push("rendered original order mismatch");
   }
   validateComputedFontSizes(manifest.dom?.fontSizes, errors);
@@ -487,7 +510,7 @@ export async function validateClassicArtifacts(options: ValidateOptions): Promis
     height: dimensions.height,
     tokenCount: allTokens.length,
     annotationCount: annotatedTokens.length,
-    annotationCoverage: 1,
+    annotationCoverage: coverage,
     interpretationParagraphs: spec.interpretation.length,
     heroPresent: Boolean(heroPath),
     heroVisible: manifest.heroVisible === true,

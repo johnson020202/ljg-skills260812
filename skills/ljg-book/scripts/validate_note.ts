@@ -48,15 +48,35 @@ function substantive(value: string): boolean {
 
 function segmentField(line: string, field: string): string {
   const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return line.match(new RegExp(`${escaped}[：:]\\s*([^｜|\\n]*)`))?.[1]?.trim() ?? "";
+  return line.match(new RegExp(`(?:^|[｜|]|^- \\[[^\\]\\n]+\\])[ \\t]*${escaped}[：:][ \\t]*([^｜|\\n]*)`))?.[1]?.trim() ?? "";
 }
 
-function locationForZone(content: string, zone: string): string {
-  const line = content.match(new RegExp(`^- \\[${zone}\\][^\\n]*$`, "m"))?.[0] ?? "";
-  return line.match(/位置[：:]\s*([^｜|\n]*)/)?.[1]?.trim() ?? "";
+function markdownMetadata(content: string, errors: string[]): { metadata: Record<string, unknown>; body: string } {
+  const lines = content.replace(/^\uFEFF/, "").split("\n");
+  const delimited = /^---[ \t]*$/.test(lines[0]);
+  // Keep the already-supported book legacy header, but only at the file start.
+  const end = delimited
+    ? lines.findIndex((line, index) => index > 0 && /^(?:---|\.\.\.)[ \t]*$/.test(line))
+    : lines.findIndex((line) => !line.trim());
+  if (delimited && end < 0) {
+    errors.push("YAML frontmatter 缺少结束分隔符");
+    return { metadata: {}, body: "" };
+  }
+  const body = end < 0 ? "" : lines.slice(end + 1).join("\n");
+  try {
+    if (typeof Bun.YAML?.parse !== "function") throw new Error("需要支持 Bun.YAML.parse 的 Bun（已验证 1.3.14）");
+    const value = Bun.YAML.parse(lines.slice(delimited ? 1 : 0, end < 0 ? lines.length : end).join("\n"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("元数据必须是映射");
+    return { metadata: Object.fromEntries(Object.entries(value).map(([key, val]) => [key.toLowerCase(), val])), body };
+  } catch (error) {
+    errors.push(`YAML frontmatter 无效：${error instanceof Error ? error.message : String(error)}`);
+    return { metadata: {}, body };
+  }
 }
 
 export function validate(content: string, file: string, coverage?: string): Result {
+  content = content.replace(/\r\n?/g, "\n");
+  coverage = coverage?.replace(/\r\n?/g, "\n");
   const errors: string[] = [];
   const warnings: string[] = [];
   const markdownMode = file.toLowerCase().endsWith(".md");
@@ -64,18 +84,22 @@ export function validate(content: string, file: string, coverage?: string): Resu
     ? ["title", "subtitle", "description", "date", "tags", "identifier"]
     : ["TITLE", "SUBTITLE", "DESCRIPTION", "DATE", "FILETAGS", "IDENTIFIER"];
 
+  const parsed = markdownMode ? markdownMetadata(content, errors) : undefined;
+  const headerValue = (header: string): unknown => parsed
+    ? parsed.metadata[header]
+    : content.match(new RegExp(`^#\\+${header}:[ \\t]*([^\\n]*)$`, "mi"))?.[1]?.trim();
   for (const header of requiredHeaders) {
-    const pattern = markdownMode
-      ? new RegExp(`^${header}:\\s*\\S`, "mi")
-      : new RegExp(`^#\\+${header}:\\s*\\S`, "mi");
-    if (!pattern.test(content)) {
+    const value = headerValue(header);
+    const nonEmpty = typeof value === "string" ? Boolean(value.trim())
+      : header === "tags" && Array.isArray(value) && value.length > 0
+        && value.every((tag) => typeof tag === "string" && tag.trim());
+    if (!nonEmpty) {
       errors.push(`缺少或为空的 ${markdownMode ? header : `#+${header}`}`);
     }
   }
 
-  const identifier = markdownMode
-    ? content.match(/^identifier:\s*(\S+)/mi)?.[1] ?? ""
-    : content.match(/^#\+IDENTIFIER:\s*(\S+)/mi)?.[1] ?? "";
+  const rawIdentifier = headerValue(markdownMode ? "identifier" : "IDENTIFIER");
+  const identifier = typeof rawIdentifier === "string" ? rawIdentifier.trim() : "";
   const filenameIdentifier = basename(file).match(/^(\d{8}T\d{6})--/)?.[1] ?? "";
   if (!filenameIdentifier) {
     errors.push("文件名不是 Denote 时间戳格式");
@@ -83,6 +107,7 @@ export function validate(content: string, file: string, coverage?: string): Resu
     errors.push(`IDENTIFIER ${identifier || "为空"} 与文件名 ${filenameIdentifier} 不一致`);
   }
 
+  if (parsed) content = parsed.body;
   const headingPattern = markdownMode ? /^# ([^#].*)$/gm : /^\* ([^*].*)$/gm;
   const headingMatches = [...content.matchAll(headingPattern)];
   const headings = headingMatches.map((match) => match[1].trim());
@@ -118,15 +143,22 @@ export function validate(content: string, file: string, coverage?: string): Resu
 
   const bodyStart = headingMatches[0]?.index ?? -1;
   const narrativeBody = bodyStart >= 0 ? content.slice(bodyStart) : "";
+  // A title may contain 导论/第3章; lexical matches alone cannot identify source narration.
+  const sourceText = narrativeBody.replace(/《[^》\n]*》/g, "《书名》");
+  const sourceLabel = "(?:前言|序言|导言|导论|开篇|结论章|末章|章节|前部|中部|后部|第[0-9一二三四五六七八九十百千万〇两]+(?:章|节|部|卷|篇))";
   const sourceStructurePatterns = [
-    /前言|序言|导言|导论|开篇|结论章|末章|章节|前部|中部|后部/g,
-    /第[0-9一二三四五六七八九十百千万〇两]+(?:章|节|部|卷|篇)/g,
+    new RegExp(`(?:作者在|书中|书的|本书(?:的|中)?|全书(?:的|中)?|《书名》(?:的|中)?)${sourceLabel}(?:中|里)?(?:先|首先|接着|最后)?(?:交代|讨论|介绍|提出|给出|展开|说明|总结)`, "g"),
+    new RegExp(`(?:^|[。！？\\n])[ \\t]*(?:前言|序言|导言|导论|开篇|结论章|末章|第[0-9一二三四五六七八九十百千万〇两]+(?:章|节|部))(?:中|里)?(?:先|首先|接着|最后)?(?:交代|讨论|介绍|提出|给出|展开|说明|总结)`, "g"),
+    /(?:这些|各个|各|前后)章节(?:依次|逐一|分别)(?:展开|讨论|介绍|说明)/g,
+    new RegExp(`^(?:#{1,6}|\\*{1,6})[ \\t]+${sourceLabel}(?:[ \\t]*$|[：:])`, "gm"),
   ];
   const sourceStructureHits = sourceStructurePatterns.flatMap((pattern) =>
-    [...narrativeBody.matchAll(pattern)].map((match) => match[0]),
+    [...sourceText.matchAll(pattern)].map((match) => match[0].trim()),
   );
   if (sourceStructureHits.length > 0) {
     errors.push(`正文不能用来源结构标签组织叙述：${[...new Set(sourceStructureHits)].join("、")}`);
+  } else if (new RegExp(sourceLabel).test(sourceText)) {
+    warnings.push("出现可能的来源位置词；仅提示人工复核，不把普通方位、书名或比喻判为结构错误");
   }
 
   let materialGrade = "";
@@ -147,8 +179,14 @@ export function validate(content: string, file: string, coverage?: string): Resu
 
     if (materialGrade === "完整拆书") {
       const authorFields = ["问题", "对象", "方法"].filter((field) => substantive(lineField(coverage, field))).length;
-      const zones = ["question", "setup", "mechanism", "boundary"];
-      coverageZones = zones.filter((zone) => substantive(locationForZone(coverage, zone))).length;
+      const zones = [
+        ["question", "作者为什么非处理这个问题不可"], ["setup", "对象和基本区分怎样建立"],
+        ["mechanism", "核心机制或做法怎样运行"], ["boundary", "最后形成什么、停在哪里"],
+      ];
+      coverageZones = zones.filter(([zone, explanation]) => {
+        const line = coverage.match(new RegExp(`^- \\[${zone}\\][^\\n]*$`, "m"))?.[0] ?? "";
+        return ["位置", explanation, "证据"].every((field) => substantive(segmentField(line, field)));
+      }).length;
       const candidates = [...coverage.matchAll(/^- \[candidate\]\s+.+$/gm)];
       const candidateFields = ["名称", "位置", "解决的问题", "与其他部件的关系", "决定", "删除测试"];
       const completeCandidates = candidates.filter((candidate) =>
@@ -159,7 +197,7 @@ export function validate(content: string, file: string, coverage?: string): Resu
       const challengeFields = ["当前理解", "反证", "处理"].filter((field) => substantive(lineField(coverage, field))).length;
 
       if (authorFields !== 3) errors.push("完整拆书的覆盖记录没有填完作者自述的问题、对象与方法");
-      if (coverageZones !== 4) errors.push("完整拆书的覆盖记录没有填完问题、对象、机制与边界四类证据的位置");
+      if (coverageZones !== 4) errors.push("完整拆书的覆盖记录没有填完问题、对象、机制与边界四类证据的位置、说明与证据");
       if (candidates.length < 5 || candidates.length > 12) {
         errors.push(`完整拆书的覆盖记录必须有 5–12 个候选部件，当前为 ${candidates.length}`);
       } else if (completeCandidates !== candidates.length) {

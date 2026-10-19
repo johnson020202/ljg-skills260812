@@ -51,6 +51,12 @@ def compact_report(audit: dict) -> tuple[str, int]:
         f"minFont={min_font}  under{audit['fontFloorPx']}px={audit['underFloorPx']}"
     )
     lines.append(f"ISSUES P1={c['1']} P2={c['2']} P3={c['3']}")
+    review = audit.get('huiwenReview', {})
+    if review.get('status') == 'manual-review-required':
+        candidates = review.get('candidates', [])
+        lines.append(f"GLYPHS manual-review-required (Huiwen; candidate spans={len(candidates)}; not glyph verification)")
+        for candidate in candidates:
+            lines.append(f"       {candidate['selector']}{candidate.get('pseudo', '')}: {candidate['characters']}")
     if audit["issues"]:
         lines.append("")
         for i in audit["issues"]:
@@ -66,19 +72,17 @@ def compact_report(audit: dict) -> tuple[str, int]:
 
 
 def main() -> None:
+    render_png.configure_stdio()
     ap = argparse.ArgumentParser()
     ap.add_argument("input_html", type=Path)
     ap.add_argument("--outdir", type=Path, default=Path("out"))
     ap.add_argument("--width", type=int, default=1440)
-    ap.add_argument("--scale", type=float, default=2.0)
+    ap.add_argument("--scale", type=float, default=render_png.DEFAULT_SCALE, help='output pixels per CSS px (default .75: 1080px at width 1440)')
     ap.add_argument("--thumb-width", type=int, default=440)
     args = ap.parse_args()
 
     html = args.input_html.resolve()
-    if not html.exists():
-        raise SystemExit(f"Input HTML not found: {html}")
-    outdir = args.outdir.resolve()
-    outdir.mkdir(parents=True, exist_ok=True)
+    outdir = args.outdir.absolute()
     stem = html.stem
     png = outdir / f"{stem}.png"
     slices = outdir / f"{stem}-sections"
@@ -86,28 +90,36 @@ def main() -> None:
     sheet = outdir / f"{stem}-sheet.png"
     thumb = outdir / f"{stem}-thumb.png"
 
-    render_png.render(html, png, args.width, args.scale, audit_path, slices, None)
-
-    audit = json.loads(audit_path.read_text())
-
-    # readable sheet from per-section crops
-    from_sections(slices, sheet)
-
-    # phone-scale thumbnail: what the reader actually sees when scrolling
-    im = Image.open(png)
-    tw = args.thumb_width
-    th = int(im.height * tw / im.width)
-    im.resize((tw, th), Image.LANCZOS).save(thumb, "PNG", optimize=True)
-
-    # whole-poster overview tiles (catches rhythm / repetition problems)
-    overview(png, outdir / f"{stem}-overview.png", cols=3, section_px=1600)
+    overview_path = outdir / f"{stem}-overview.png"
+    try:
+        if args.thumb_width <= 0:
+            raise ValueError('--thumb-width must be positive')
+        with render_png.OutputTransaction([png, audit_path, slices, sheet, thumb, overview_path], html) as tx:
+            stats = render_png.build(html, tx.path(png), args.width, args.scale,
+                                     tx.path(audit_path), tx.path(slices))
+            audit = json.loads(tx.path(audit_path).read_text(encoding='utf-8'))
+            from_sections(tx.path(slices), tx.path(sheet))
+            with Image.open(tx.path(png)) as im:
+                tw = args.thumb_width
+                th = max(1, round(im.height * tw / im.width))
+                with im.resize((tw, th), Image.Resampling.LANCZOS) as thumbnail:
+                    thumbnail.save(tx.path(thumb), 'PNG')
+            overview(tx.path(png), tx.path(overview_path), cols=3, section_px=1600)
+            for derived in (sheet, thumb, overview_path):
+                render_png.validate_png(tx.path(derived))
+            tx.commit()
+        stats['png'] = str(png)
+        print(json.dumps(stats))
+    except Exception as error:
+        print(f'RENDER FAILED: {error}', file=sys.stderr)
+        raise SystemExit(2)
 
     report, p1 = compact_report(audit)
     print()
     print("=" * 72)
     print(report)
     print("=" * 72)
-    print(f"PNG      {png}  {Image.open(png).size}")
+    print(f"PNG      {png}  {tuple(stats['size'])}")
     print(f"SHEET    {sheet}   <- read this one image first")
     print(f"THUMB    {thumb}")
     print(f"SECTIONS {slices}/")

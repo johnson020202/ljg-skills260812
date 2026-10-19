@@ -102,6 +102,116 @@ identifier: 20260812T120000
 `;
 }
 
+describe("TXT-01–04 regression boundaries", () => {
+  for (const sentence of [
+    "士兵从队伍后部绕到桥边。", "工作人员把物体中部的螺丝拧紧。",
+    "他第一次读《几何学导论》时改变了判断。", "车的前部需要维修。",
+    "他读《第3章》时想起了队伍后部的同伴。", "这是他生命的新章节。",
+    "本书的中部被咖啡打湿，书的后部贴了一张纸。", "他曾替《几何学导论》写过序言。",
+  ]) {
+    test(`allows ordinary prose: ${sentence}`, () => {
+      expect(validate(note({ firstBody: sentence }), filename, coverage()).ok).toBe(true);
+    });
+  }
+
+  for (const sentence of ["书中后部给出反例。", "本书的中部讨论了边界。", "作者在《示例》的第3章给出例子。"] ) {
+    test(`still rejects explicit source narration: ${sentence}`, () => {
+      expect(validate(note({ firstBody: sentence }), filename, coverage()).errors.join("\n")).toContain("来源结构标签");
+    });
+  }
+
+  for (const sentence of [
+    "第3章给出例子。第4章说明边界。", "第三节介绍背景。", "第2部先讨论判断。",
+    "他先作了选择。第4章说明边界。", "第十章里最后总结得失。",
+  ]) {
+    test(`review regression: rejects sentence-leading chapter narration: ${sentence}`, () => {
+      const result = validate(note({ firstBody: sentence }), filename, coverage());
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toContain("来源结构标签");
+    });
+  }
+
+  for (const sentence of [
+    "《第3章给出例子》是他正在读的书。", "物体中部和队伍后部都留出空间。",
+    "第三节车厢靠近出口。", "第2部机器停下了。", "他把第3章的书页折了一角。",
+  ]) {
+    test(`review regression: allows non-narrative chapter/location wording: ${sentence}`, () => {
+      expect(validate(note({ firstBody: sentence }), filename, coverage()).ok).toBe(true);
+    });
+  }
+
+  test("ambiguous source words are advisory rather than hard errors", () => {
+    const result = validate(note({ firstBody: "他想写一篇导论，又怕前言不搭后语。" }), filename, coverage());
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toContain("人工复核");
+  });
+
+  for (const header of ["TITLE", "SUBTITLE", "DESCRIPTION", "DATE", "FILETAGS", "IDENTIFIER"]) {
+    for (const newline of ["\n", "\r\n"]) {
+      test(`rejects empty same-line Org ${header} (${JSON.stringify(newline)})`, () => {
+        const input = note().replace(new RegExp(`^#\\+${header}:.*$`, "m"), `#+${header}: \t`).replace(/\n/g, newline);
+        const result = validate(input, filename, coverage());
+        expect(result.ok).toBe(false);
+        expect(result.errors).toContain(`缺少或为空的 #+${header}`);
+      });
+    }
+  }
+
+  const zones = [
+    ["question", "作者为什么非处理这个问题不可"], ["setup", "对象和基本区分怎样建立"],
+    ["mechanism", "核心机制或做法怎样运行"], ["boundary", "最后形成什么、停在哪里"],
+  ];
+  for (const [zone, explanation] of zones) {
+    for (const field of ["位置", explanation, "证据"]) {
+      test(`requires ${zone} ${field}, not just a location`, () => {
+        const input = coverage().split("\n").map((line) => line.startsWith(`- [${zone}]`)
+          ? line.replace(new RegExp(`${field}：[^｜]*`), `${field}： \t`) : line).join("\n");
+        const result = validate(note(), filename, input);
+        expect(result.ok).toBe(false);
+        expect(result.checks.coverage_zones).toBe(3);
+        expect(result.errors.join("\n")).toContain("四类证据");
+      });
+    }
+  }
+
+  test("audit counterexample: four locations without explanations or evidence cover zero zones", () => {
+    const input = coverage().replace(/(^- \[(?:question|setup|mechanism|boundary)\] 位置：[^｜\n]+).*$/gm, "$1｜证据：");
+    const result = validate(note(), filename, input);
+    expect(result.ok).toBe(false);
+    expect(result.checks.coverage_zones).toBe(0);
+  });
+
+  test("an unrelated segment containing the word evidence is not the evidence field", () => {
+    const result = validate(note(), filename, coverage().replace(/｜证据：/g, "｜非证据："));
+    expect(result.ok).toBe(false);
+    expect(result.checks.coverage_zones).toBe(0);
+  });
+
+  test("YAML comments cannot become note headings", () => {
+    const [headers, ...body] = markdownNote().split("\n\n");
+    const input = `---\n${headers}\n# 问题\n---\n\n${body.join("\n\n")}`;
+    const result = validate(input, filename.replace(/\.org$/, ".md"), coverage());
+    expect(result.ok).toBe(true);
+    expect(result.checks.top_headings).toBe(2);
+  });
+
+  test("accepts CRLF and ASCII coverage separators", () => {
+    expect(validate(note().replace(/\n/g, "\r\n"), filename, coverage().replace(/｜/g, "|").replace(/\n/g, "\r\n")).ok).toBe(true);
+  });
+
+  test("accepts real YAML frontmatter with quoted scalars and tag arrays", () => {
+    const [headers, ...body] = markdownNote().split("\n\n");
+    const input = `---\n${headers.replace("identifier: 20260812T120000", 'identifier: "20260812T120000"').replace("tags: book,test", 'tags: ["book", "test"]')}\n---\n\n${body.join("\n\n")}`;
+    expect(validate(input, filename.replace(/\.org$/, ".md"), coverage()).ok).toBe(true);
+  });
+
+  test("rejects malformed or unclosed delimited YAML", () => {
+    for (const input of [`---\n${markdownNote()}`, `---\ntitle: \"broken\n---\n${markdownNote()}`]) {
+      expect(validate(input, filename.replace(/\.org$/, ".md"), coverage()).ok).toBe(false);
+    }
+  });
+});
+
 describe("validate ljg-book note", () => {
   test("accepts three content-led headings", () => {
     const result = validate(note(), filename, coverage());

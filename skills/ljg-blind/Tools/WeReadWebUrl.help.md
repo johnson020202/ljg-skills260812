@@ -2,10 +2,12 @@
 
 把微信读书 API 返回的裸 `bookId`、`chapterUid` 编码成电脑端可打开的网页阅读器链接。
 
+`{skill_dir}` 是本次实际加载的 `ljg-blind/SKILL.md` 所在绝对目录；执行前替换占位符，不能假定全局安装或改用旧副本。
+
 ## 用法
 
 ```bash
-bun "${HOME}/.agents/skills/ljg-blind/Tools/WeReadWebUrl.ts" <bookId> [chapterUid]
+bun "{skill_dir}/Tools/WeReadWebUrl.ts" <bookId> [chapterUid]
 ```
 
 - 同时传 bookId、chapterUid：输出目标章节网页链接。
@@ -16,7 +18,7 @@ bun "${HOME}/.agents/skills/ljg-blind/Tools/WeReadWebUrl.ts" <bookId> [chapterUi
 ## 示例
 
 ```bash
-bun "${HOME}/.agents/skills/ljg-blind/Tools/WeReadWebUrl.ts" 573976 13
+bun "{skill_dir}/Tools/WeReadWebUrl.ts" 573976 13
 ```
 
 输出：

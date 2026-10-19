@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { resolve } from "node:path";
+import { cssCode, inspectJavaScript, inspectMarkup } from "./InspectDeck";
 
 const VERSION = "4.5.0";
 
@@ -11,8 +12,9 @@ Usage:
   bun Tools/ValidateDeck.ts --self-test
   bun Tools/ValidateDeck.ts --help
 
-Checks:
-  template version and JavaScript syntax
+Checks (static template contract; run the browser regression suite for execution smoke tests):
+  finished decks reject unresolved fields; only explicit --template uses fixtures
+  template version and JavaScript syntax in every executable block
   stable centered stage axis, finite composition grammar, whitespace budget, header/footer contract
   semantic-atom Takahashi typography, CJK tail guard, grouped rows and measured fit guard
   offline math guards and presentation key map
@@ -47,7 +49,7 @@ function parseArgs(args: string[]): Options {
   return options;
 }
 
-function materializeTemplate(html: string, theme = "hacker") {
+export function materializeTemplate(html: string, theme = "hacker", slides?: unknown[]) {
   const fixtureSlides = [
     { emphasis: true, lines: [{ indent: 0, chunks: [{ t: "章节" }] }], sourceIds: ["SRC-001"] },
     { lines: [{ indent: 0, chunks: [{ t: "脑力：组织信息" }] }, { indent: 0, chunks: [{ t: "心力：组织自己" }] }], sourceIds: ["SRC-002", "SRC-003"] },
@@ -65,7 +67,7 @@ function materializeTemplate(html: string, theme = "hacker") {
     .replaceAll("{{TITLE}}", () => "Fixture Deck")
     .replaceAll("{{SUBTITLE}}", () => "Fixture Meta")
     .replaceAll("{{THEME}}", () => theme)
-    .replaceAll("{{SLIDES_JSON}}", () => JSON.stringify(fixtureSlides));
+    .replaceAll("{{SLIDES_JSON}}", () => JSON.stringify(slides ?? fixtureSlides).replaceAll("<", "\\u003c"));
 }
 
 function mathSegments(text: string) {
@@ -100,23 +102,32 @@ function contrastRatio(foreground: string, background: string) {
   return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
 }
 
-function validateHtml(original: string, options: Pick<Options, "theme" | "template">): Check[] {
-  const html = options.template || original.includes("{{SLIDES_JSON}}")
-    ? materializeTemplate(original, options.theme || "hacker")
-    : original;
-  const style = html.match(/<style>([\s\S]*?)<\/style>/i)?.[1] ?? "";
-  const script = html.match(/<script>([\s\S]*?)<\/script>/i)?.[1] ?? "";
+export async function validateHtml(original: string, options: Pick<Options, "theme" | "template">): Promise<Check[]> {
+  const html = options.template ? materializeTemplate(original, options.theme || "hacker") : original;
+  const markup = await inspectMarkup(html);
+  const style = markup.styles.join("\n");
+  const executable = markup.scripts.filter(block => {
+    const type = block.type.split(";")[0].trim();
+    return !type || type === "module" || /^(?:(?:text|application)\/(?:x-)?(?:javascript(?:1\.[0-5])?|ecmascript)|text\/(?:jscript|livescript))$/.test(type);
+  });
+  const script = executable.map(block => block.text).join("\n");
   const checks: Check[] = [];
   const add = (id: string, pass: boolean, detail: string) => checks.push({ id, pass, detail });
+  const placeholders = html.match(/\{\{[^{}]*\}\}/g) || [];
+  add("unreplaced-placeholders", placeholders.length === 0, placeholders.length ? placeholders.join(", ") : "no template fields remain");
 
-  let syntaxPass = false;
-  try {
-    new Function(script);
-    syntaxPass = true;
-  } catch (error) {
-    add("javascript-syntax", false, String(error));
+  const syntaxErrors: string[] = [];
+  const jsMotion: string[] = [];
+  const jsResources: string[] = [];
+  for (const [index, block] of [...executable, ...markup.handlers.map(text => ({ text, type: "handler" }))].entries()) {
+    try {
+      const goal = block.type === "module" ? "module" : block.type === "handler" ? "handler" : "script";
+      const inspected = inspectJavaScript(block.text, goal);
+      jsMotion.push(...inspected.motion);
+      jsResources.push(...inspected.resources);
+    } catch (error) { syntaxErrors.push(`script/handler ${index + 1}: ${String(error)}`); }
   }
-  if (syntaxPass) add("javascript-syntax", true, "script compiles");
+  add("javascript-syntax", executable.length > 0 && syntaxErrors.length === 0, syntaxErrors.join("; ") || "all executable blocks compile");
 
   add("template-version", html.includes('data-template-version="4.5.0"'), "template version is 4.5.0");
   add("title-present", /<title>[^<]+<\/title>/i.test(html), "document title is non-empty");
@@ -166,13 +177,12 @@ function validateHtml(original: string, options: Pick<Options, "theme" | "templa
   );
   add("title-short-signal", titleSignal, "title page uses a short signal rule instead of a full-width border");
 
-  const cssMotion = style.match(/\b(?:animation|transition|view-transition)(?:-[a-z-]+)?\s*:|@keyframes\b|scroll-behavior\s*:\s*smooth\b/gi) || [];
-  const jsMotion = script.match(/\.animate\s*\(|setInterval\s*\(/g) || [];
+  const css = markup.styles.map(cssCode).join("\n");
+  const cssMotion = css.match(/\b(?:-webkit-)?(?:animation|transition|view-transition)(?:-[a-z-]+)?\s*:|@(?:-webkit-)?keyframes\b|scroll-behavior\s*:\s*smooth\b/gi) || [];
   add("zero-motion", cssMotion.length === 0 && jsMotion.length === 0, `css=${cssMotion.length}, js=${jsMotion.length}`);
 
-  const externalMarkup = html.match(/<(?:img|svg|link|iframe|video|audio|source)\b|https?:\/\//gi) || [];
-  const externalCss = style.match(/@import\b|\burl\s*\(|\bimage-set\s*\(/gi) || [];
-  add("offline", externalMarkup.length === 0 && externalCss.length === 0, `markup=${externalMarkup.length}, css=${externalCss.length}`);
+  const externalCss = css.match(/@import\b|\burl\s*\(|\b(?:-webkit-)?image-set\s*\(/gi) || [];
+  add("offline", markup.resources.length === 0 && externalCss.length === 0 && jsResources.length === 0, `markup=${markup.resources.length}, css=${externalCss.length}, js=${jsResources.length}; ${[...markup.resources, ...jsResources].join(", ")}`);
 
   add("render-lines", script.includes("slide.lines?.length") && script.includes('lines.className = "lines fit-box"'), "lines renderer exists");
   add("render-table", script.includes("slide.table") && script.includes("slide.table.header === true") && script.includes('document.createElement("thead")') && script.includes('document.createElement("tbody")'), "table renderer respects explicit header flag and semantic sections");
@@ -250,7 +260,7 @@ function validateHtml(original: string, options: Pick<Options, "theme" | "templa
     const darkCoverBodies = ruleBodies(style, 'body[data-theme="hacker-dark"] .slide[data-cover="true"]');
     add("hacker-dark-all-pages", darkSlideBodies.some((body) => body.includes("var(--hacker-dark-bg)")) && darkCoverBodies.some((body) => body.includes("var(--hacker-dark-deep)")), "regular and cover pages both use distinct dark fields");
     add("hacker-dark-signal-scope", style.includes("--fg: var(--hacker-dark-fg)") && !/\.line\s*\{[^}]*color\s*:\s*var\(--hacker-dark-signal\)/s.test(style), "signal green is not the body-text color");
-    add("hacker-dark-no-effects", !/\b(?:text-shadow|box-shadow)\s*:|drop-shadow\s*\(|@keyframes\b|\banimation(?:-[a-z-]+)?\s*:|\btransition(?:-[a-z-]+)?\s*:/i.test(style), "dark theme has no glow, shadow, animation, or transition effects");
+    add("hacker-dark-no-effects", !/\b(?:text-shadow|box-shadow)\s*:|drop-shadow\s*\(|@keyframes\b|\banimation(?:-[a-z-]+)?\s*:|\btransition(?:-[a-z-]+)?\s*:/i.test(css), "dark theme has no glow, shadow, animation, or transition effects");
     const symmetricDark = darkSlideBodies.length > 0
       && darkRailBodies.some((body) => /left\s*:\s*50%/.test(body) && /translateX\(-50%\)/.test(body));
     add("symmetric-hacker-dark-stage", symmetricDark, "dark Hacker ornament remains on the centered stage axis");
@@ -284,9 +294,9 @@ function printResult(label: string, checks: Check[], json: boolean) {
 async function selfTest() {
   const templatePath = resolve(import.meta.dir, "..", "SloganTemplate.html");
   const template = await Bun.file(templatePath).text();
-  const goodChecks = validateHtml(template, { theme: "hacker", template: true });
+  const goodChecks = await validateHtml(template, { theme: "hacker", template: true });
   const goodPass = goodChecks.every((check) => check.pass);
-  const darkChecks = validateHtml(template, { theme: "hacker-dark", template: true });
+  const darkChecks = await validateHtml(template, { theme: "hacker-dark", template: true });
   const darkPass = darkChecks.every((check) => check.pass);
 
   const motionFixtures = [
@@ -296,22 +306,22 @@ async function selfTest() {
     ".bad{scroll-behavior:smooth}",
     ".bad{view-transition-name:card}"
   ];
-  const motionFixturesRejected = motionFixtures.every((fixture) => {
+  const motionFixturesRejected = (await Promise.all(motionFixtures.map(async (fixture) => {
     const bad = template.replace("</style>", `${fixture}</style>`);
-    return validateHtml(bad, { theme: "hacker", template: true })
+    return (await validateHtml(bad, { theme: "hacker", template: true }))
       .some((check) => check.id === "zero-motion" && !check.pass);
-  });
+  }))).every(Boolean);
 
   const resourceFixtures = [
     ".bad{background-image:url(external.png)}",
     '@import "theme.css";',
     '.bad{background-image:image-set("one.png" 1x)}'
   ];
-  const resourceFixturesRejected = resourceFixtures.every((fixture) => {
+  const resourceFixturesRejected = (await Promise.all(resourceFixtures.map(async (fixture) => {
     const bad = template.replace("</style>", `${fixture}</style>`);
-    return validateHtml(bad, { theme: "hacker", template: true })
+    return (await validateHtml(bad, { theme: "hacker", template: true }))
       .some((check) => check.id === "offline" && !check.pass);
-  });
+  }))).every(Boolean);
 
   const spatialFixtures = [
     {
@@ -357,10 +367,10 @@ async function selfTest() {
       html: template.replace("width: min(82vw, 1480px);", "width: min(96vw, 1700px);")
     }
   ];
-  const spatialFixturesRejected = spatialFixtures.every((fixture) =>
-    validateHtml(fixture.html, { theme: "hacker", template: true })
+  const spatialFixturesRejected = (await Promise.all(spatialFixtures.map(async (fixture) =>
+    (await validateHtml(fixture.html, { theme: "hacker", template: true }))
       .some((check) => check.id === fixture.id && !check.pass)
-  );
+  ))).every(Boolean);
 
   const semanticFixtures = [
     {
@@ -379,10 +389,10 @@ async function selfTest() {
       html: template.replace('if (slide.semanticGroup) element.dataset.semanticGroup = slide.semanticGroup;', "")
     }
   ];
-  const semanticFixturesRejected = semanticFixtures.every((fixture) =>
-    validateHtml(fixture.html, { theme: "hacker", template: true })
+  const semanticFixturesRejected = (await Promise.all(semanticFixtures.map(async (fixture) =>
+    (await validateHtml(fixture.html, { theme: "hacker", template: true }))
       .some((check) => check.id === fixture.id && !check.pass)
-  );
+  ))).every(Boolean);
 
   const layouts = [
     chooseLayout([22, 24]),
@@ -429,9 +439,9 @@ async function main() {
   }
 
   const html = await Bun.file(options.file).text();
-  const checks = validateHtml(html, options);
+  const checks = await validateHtml(html, options);
   const pass = printResult(options.file, checks, options.json);
   if (!pass) process.exit(1);
 }
 
-await main();
+if (import.meta.main) await main();

@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 
-import { mkdir, readdir, unlink } from "node:fs/promises";
-import { dirname, extname, resolve } from "node:path";
+import { mkdir, open, readdir, unlink } from "node:fs/promises";
+import { basename, dirname, extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import sharp from "sharp";
+import { ArtifactTransaction, GENERATED_SLICE_NAME, preflightArtifacts } from "./ArtifactTransaction.ts";
 
 export type Tone = "word" | "clause" | "variant";
 
@@ -80,6 +82,21 @@ function assertPlainString(value: unknown, label: string): asserts value is stri
   }
 }
 
+// Unicode punctuation, not caller-supplied labels. Letters, numbers (including 〇),
+// symbols and invisible formatting characters must never disappear from coverage.
+export function isPunctuationText(text: string): boolean {
+  return text === "\n" || /^\p{P}+$/u.test(text);
+}
+
+export function annotationCoverage(spec: ClassicSpec): number {
+  const bodyChars = (text: string) => Array.from(text).filter(char => !isPunctuationText(char) && !/\s/u.test(char)).length;
+  const total = bodyChars(spec.original);
+  const annotated = spec.passages.flatMap(passage => passage.tokens)
+    .filter(token => token.punctuation !== true && typeof token.note === "string" && token.note.trim())
+    .reduce((sum, token) => sum + bodyChars(token.text), 0);
+  return total > 0 ? annotated / total : 0;
+}
+
 function isExplicitLineBreak(token: Pick<ClassicToken, "text" | "punctuation">): boolean {
   return token.punctuation === true && token.text === "\n";
 }
@@ -143,6 +160,7 @@ export function validateSpec(value: unknown): ClassicSpec {
       originalParts.push(token.text);
 
       if (token.punctuation === true) {
+        if (!isPunctuationText(token.text)) throw new Error(`${label}.punctuation requires actual Unicode punctuation or an isolated newline`);
         if (token.text.trim().length === 0 && !isExplicitLineBreak(token)) {
           throw new Error(`${label}.text may only be the explicit newline "\\n" when punctuation is whitespace`);
         }
@@ -160,6 +178,9 @@ export function validateSpec(value: unknown): ClassicSpec {
         throw new Error(`${label}.pinyin must be a non-empty string when provided`);
       }
     });
+    // Layout grouping can fail for a punctuation-only passage. Validate it before
+    // staging or touching any previously published output.
+    groupPassageTokens(passage.tokens);
   });
 
   const reconstructed = originalParts.join("");
@@ -169,6 +190,7 @@ export function validateSpec(value: unknown): ClassicSpec {
     );
   }
 
+  if (annotationCoverage(spec as ClassicSpec) !== 1) throw new Error("Every body character must have annotation coverage");
   return spec as ClassicSpec;
 }
 
@@ -537,7 +559,7 @@ function parseArgs(args: string[]): RenderOptions | null {
   const resolvedOutput = resolve(output);
   const html = values.get("--html")
     ? resolve(values.get("--html")!)
-    : resolvedOutput.slice(0, -extname(resolvedOutput).length) + ".html";
+    : outputStem(resolvedOutput) + ".html";
   return {
     input: resolve(input),
     output: resolvedOutput,
@@ -549,75 +571,83 @@ function parseArgs(args: string[]): RenderOptions | null {
 
 export async function sha256File(path: string): Promise<string> {
   const hasher = new Bun.CryptoHasher("sha256");
-  hasher.update(await Bun.file(path).arrayBuffer());
-  return hasher.digest("hex");
+  const file = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(64 * 1024);
+    for (;;) {
+      const { bytesRead } = await file.read(buffer);
+      if (!bytesRead) break;
+      hasher.update(buffer.subarray(0, bytesRead));
+    }
+    return hasher.digest("hex");
+  } finally { await file.close(); }
 }
 
-export async function readHeroDataUri(path: string): Promise<string> {
-  const mimeByExtension: Record<string, string> = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-  };
-  const mime = mimeByExtension[extname(path).toLowerCase()];
-  if (!mime) throw new Error("heroImage must be PNG, JPEG, or WebP");
-  const file = Bun.file(path);
-  if (!(await file.exists())) throw new Error(`heroImage not found: ${path}`);
-  const bytes = await file.arrayBuffer();
-  if (bytes.byteLength === 0) throw new Error(`heroImage is empty: ${path}`);
-  return `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`;
+function outputStem(path: string): string {
+  const extension = extname(path);
+  return extension ? path.slice(0, -extension.length) : path;
 }
 
-export async function readPngDimensions(path: string): Promise<{ width: number; height: number }> {
-  const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
-  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
-  if (bytes.length < 45 || signature.some((byte, index) => bytes[index] !== byte)) {
-    throw new Error(`${path} is not a valid PNG`);
+// Caps apply before allocation/decompression, to heroes as well as output/QA PNGs.
+export const IMAGE_LIMITS = { bytes: 32 * 1024 * 1024, pixels: 32_000_000, side: 32768 } as const;
+
+export function assertImageBudget(width: number, height: number): void {
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0
+    || width > IMAGE_LIMITS.side || height > IMAGE_LIMITS.side || width * height > IMAGE_LIMITS.pixels) {
+    throw new Error(`Image resource budget exceeded: ${width}x${height}; max side ${IMAGE_LIMITS.side}, pixels ${IMAGE_LIMITS.pixels}`);
   }
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+}
+
+async function readImageBytes(path: string): Promise<Buffer> {
+  const file = await open(path, "r");
+  try {
+    const info = await file.stat();
+    if (!info.isFile() || info.size === 0 || info.size > IMAGE_LIMITS.bytes) {
+      throw new Error(`Image file resource budget exceeded or not a regular image: ${path}`);
+    }
+    // Fixed-size read also bounds a concurrently growing file.
+    const bytes = Buffer.alloc(info.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await file.read(bytes, offset, bytes.length - offset, offset);
+      if (!bytesRead) throw new Error(`Image changed while reading: ${path}`);
+      offset += bytesRead;
+    }
+    return bytes;
+  } finally { await file.close(); }
+}
+
+// Preserve the original strict container checks: libpng deliberately accepts some
+// truncated/trailing containers. This is not a decoder; pixel format, filtering,
+// interlace and decompression remain the mature decoder's responsibility.
+function validatePngContainer(bytes: Buffer): void {
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (bytes.length < 45 || !bytes.subarray(0, 8).equals(signature)) throw new Error("Invalid PNG signature/header");
   let offset = 8;
-  let width: number | null = null;
-  let height: number | null = null;
   let sawIdat = false;
-  let sawIend = false;
-  let chunkIndex = 0;
   while (offset < bytes.length) {
-    if (offset + 12 > bytes.length) throw new Error(`${path} has a truncated PNG chunk`);
-    const length = view.getUint32(offset);
-    const typeOffset = offset + 4;
+    if (offset + 12 > bytes.length) throw new Error("Truncated PNG chunk");
+    const length = bytes.readUInt32BE(offset);
     const dataOffset = offset + 8;
     const dataEnd = dataOffset + length;
     const nextOffset = dataEnd + 4;
-    if (dataEnd < dataOffset || nextOffset > bytes.length) throw new Error(`${path} has a truncated PNG chunk`);
-    const type = String.fromCharCode(...bytes.subarray(typeOffset, typeOffset + 4));
-    const expectedCrc = view.getUint32(dataEnd);
-    const actualCrc = crc32(bytes.subarray(typeOffset, dataEnd));
-    if (actualCrc !== expectedCrc) throw new Error(`${path} has an invalid ${type} CRC`);
-
-    if (chunkIndex === 0) {
-      if (type !== "IHDR" || length !== 13) throw new Error(`${path} must begin with a 13-byte IHDR chunk`);
-      width = view.getUint32(dataOffset);
-      height = view.getUint32(dataOffset + 4);
-      if (width <= 0 || height <= 0 || bytes[dataOffset + 10] !== 0 || bytes[dataOffset + 11] !== 0
-        || (bytes[dataOffset + 12] !== 0 && bytes[dataOffset + 12] !== 1)) {
-        throw new Error(`${path} has an invalid IHDR chunk`);
-      }
-    } else if (type === "IHDR") {
-      throw new Error(`${path} contains a duplicate IHDR chunk`);
-    }
+    if (nextOffset > bytes.length) throw new Error("Truncated PNG chunk");
+    const type = bytes.toString("ascii", offset + 4, dataOffset);
+    if (crc32(bytes.subarray(offset + 4, dataEnd)) !== bytes.readUInt32BE(dataEnd)) throw new Error(`Invalid PNG ${type} CRC`);
+    if (offset === 8) {
+      if (type !== "IHDR" || length !== 13) throw new Error("PNG must begin with a 13-byte IHDR");
+      assertImageBudget(bytes.readUInt32BE(dataOffset), bytes.readUInt32BE(dataOffset + 4));
+    } else if (type === "IHDR") throw new Error("Duplicate PNG IHDR");
+    if (type === "acTL" || type === "fcTL" || type === "fdAT") throw new Error("Animated PNG is not supported; expected a single-frame image");
     if (type === "IDAT") sawIdat = true;
     if (type === "IEND") {
-      if (length !== 0) throw new Error(`${path} has an invalid IEND chunk`);
-      sawIend = true;
-      if (nextOffset !== bytes.length) throw new Error(`${path} has trailing bytes after IEND`);
-      break;
+      if (length !== 0 || !sawIdat) throw new Error("Invalid or incomplete PNG IEND");
+      if (nextOffset !== bytes.length) throw new Error("PNG has trailing bytes after IEND");
+      return;
     }
     offset = nextOffset;
-    chunkIndex += 1;
   }
-  if (width === null || height === null || !sawIdat || !sawIend) throw new Error(`${path} is an incomplete PNG`);
-  return { width, height };
+  throw new Error("Incomplete PNG: missing IEND");
 }
 
 const CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
@@ -632,7 +662,38 @@ function crc32(bytes: Uint8Array): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-const GENERATED_SLICE_NAME = /^\d+--y-\d+\.png$/;
+async function decodeImage(bytes: Buffer, format: "png" | "jpeg" | "webp") {
+  if (format === "png") validatePngContainer(bytes);
+  const image = sharp(bytes, { failOn: "warning", limitInputPixels: IMAGE_LIMITS.pixels, sequentialRead: true });
+  try {
+    const metadata = await image.metadata();
+    if (metadata.format !== format || (metadata.pages ?? 1) !== 1) throw new Error(`Expected a single-frame ${format} image`);
+    assertImageBudget(metadata.width ?? 0, metadata.height ?? 0);
+    // Metadata/CRC alone is not validation. Force full pixel decoding via libvips.
+    const { info } = await image.timeout({ seconds: 15 }).raw().toBuffer({ resolveWithObject: true });
+    assertImageBudget(info.width, info.height);
+    return { width: info.width, height: info.height };
+  } finally { image.destroy(); }
+}
+
+async function readHero(path: string): Promise<{ dataUri: string; sha256: string }> {
+  const formats = { ".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".webp": "webp" } as const;
+  const format = formats[extname(path).toLowerCase() as keyof typeof formats];
+  if (!format) throw new Error("heroImage must be PNG, JPEG, or WebP");
+  if (!(await Bun.file(path).exists())) throw new Error(`heroImage not found: ${path}`);
+  const bytes = await readImageBytes(path);
+  await decodeImage(bytes, format);
+  return { dataUri: `data:image/${format};base64,${bytes.toString("base64")}`, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex") };
+}
+
+export async function readHeroDataUri(path: string): Promise<string> {
+  return (await readHero(path)).dataUri;
+}
+
+export async function readPngDimensions(path: string): Promise<{ width: number; height: number }> {
+  try { return await decodeImage(await readImageBytes(path), "png"); }
+  catch (error) { throw new Error(`${path} is not a valid PNG: ${error instanceof Error ? error.message : String(error)}`, { cause: error }); }
+}
 
 export async function clearGeneratedSlices(directory: string): Promise<void> {
   await mkdir(directory, { recursive: true });
@@ -682,11 +743,20 @@ async function run(options: RenderOptions): Promise<void> {
   const heroImagePath = spec.heroImage
     ? resolve(dirname(options.input), spec.heroImage)
     : undefined;
-  const heroDataUri = heroImagePath ? await readHeroDataUri(heroImagePath) : undefined;
-  if (options.slicesDir) await clearGeneratedSlices(options.slicesDir);
-  await mkdir(dirname(options.output), { recursive: true });
-  await mkdir(dirname(options.html), { recursive: true });
-  await Bun.write(options.html, renderHtml(spec, options.width, heroDataUri));
+  const manifestPath = outputStem(options.output) + ".manifest.json";
+  const paths = { input: options.input, hero: heroImagePath, html: options.html, png: options.output, manifest: manifestPath, slices: options.slicesDir };
+  const fingerprint = await preflightArtifacts(paths);
+  const inputHash = await sha256File(options.input);
+  const hero = heroImagePath ? await readHero(heroImagePath) : undefined;
+  const heroHash = hero?.sha256 ?? null;
+  const heroDataUri = hero?.dataUri;
+  const html = renderHtml(spec, options.width, heroDataUri);
+  const transaction = new ArtifactTransaction();
+  try {
+  const stagedHtml = await transaction.stageFile(options.html);
+  const stagedPng = await transaction.stageFile(options.output);
+  const stagedSlices = options.slicesDir ? await transaction.scratchDirectory(options.slicesDir) : undefined;
+  await Bun.write(stagedHtml, html);
 
   let chromium: typeof import("playwright").chromium;
   try {
@@ -700,7 +770,8 @@ async function run(options: RenderOptions): Promise<void> {
   let sliceDetails: QaSliceDetail[] = [];
   try {
     const page = await browser.newPage({ viewport: { width: options.width, height: 900 }, deviceScaleFactor: 1 });
-    await page.goto(pathToFileURL(options.html).href, { waitUntil: "networkidle" });
+    await page.route(/^https?:/i, route => route.abort());
+    await page.goto(pathToFileURL(stagedHtml).href, { waitUntil: "load" });
     await page.evaluate(async () => {
       await document.fonts?.ready;
       await Promise.all(Array.from(document.images).map(image => image.decode()));
@@ -774,23 +845,39 @@ async function run(options: RenderOptions): Promise<void> {
       throw new Error(`Hero image invisible: ${JSON.stringify(audit)}`);
     }
 
+    assertImageBudget(options.width, audit.documentHeight);
     await page.setViewportSize({ width: options.width, height: audit.documentHeight });
     await page.screenshot({
-      path: options.output,
+      path: stagedPng,
       type: "png",
       clip: { x: 0, y: 0, width: options.width, height: audit.documentHeight },
     });
-    if (options.slicesDir) {
-      sliceDetails = await createSlices(page, options.slicesDir, options.width, audit.documentHeight);
+    if (stagedSlices) {
+      sliceDetails = await createSlices(page, stagedSlices, options.width, audit.documentHeight);
     }
   } finally {
     await browser.close();
   }
 
-  const dimensions = await readPngDimensions(options.output);
+  const dimensions = await readPngDimensions(stagedPng);
+  if (options.slicesDir) {
+    const currentNames = new Set(sliceDetails.map(slice => basename(slice.path)));
+    // Keep historical QA files until the replacement set has been fully rendered.
+    let oldNames: string[];
+    try { oldNames = await readdir(options.slicesDir); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; oldNames = []; }
+    for (const name of oldNames) {
+      if (GENERATED_SLICE_NAME.test(name) && !currentNames.has(name)) await transaction.adopt(resolve(options.slicesDir, name));
+    }
+    for (const slice of sliceDetails) {
+      const destination = resolve(options.slicesDir, basename(slice.path));
+      await transaction.adopt(destination, slice.path);
+      slice.path = destination;
+    }
+  }
   const allTokens = spec.passages.flatMap(passage => passage.tokens);
-  const annotatedTokens = allTokens.filter(token => !token.punctuation);
-  const punctuationCount = allTokens.filter(token => token.punctuation).length;
+  const annotatedTokens = allTokens.filter(token => token.punctuation !== true);
+  const punctuationCount = allTokens.filter(token => token.punctuation === true && isPunctuationText(token.text)).length;
   const toneCounts = annotatedTokens.reduce<Record<Tone, number>>(
     (counts, token) => {
       counts[token.tone!] += 1;
@@ -798,7 +885,6 @@ async function run(options: RenderOptions): Promise<void> {
     },
     { word: 0, clause: 0, variant: 0 },
   );
-  const manifestPath = options.output.slice(0, -extname(options.output).length) + ".manifest.json";
   const manifest = {
     schemaVersion: 2,
     renderedAt: new Date().toISOString(),
@@ -820,7 +906,7 @@ async function run(options: RenderOptions): Promise<void> {
     tokenCount: allTokens.length,
     punctuationCount,
     annotationCount: annotatedTokens.length,
-    annotationCoverage: 1,
+    annotationCoverage: annotationCoverage(spec),
     toneCounts,
     interpretationParagraphs: spec.interpretation.length,
     interpretationChars: Array.from(spec.interpretation.join("")).length,
@@ -828,14 +914,23 @@ async function run(options: RenderOptions): Promise<void> {
     qaSlices: sliceDetails.map(slice => slice.path),
     qaSliceDetails: sliceDetails,
     sha256: {
-      input: await sha256File(options.input),
-      html: await sha256File(options.html),
-      png: await sha256File(options.output),
-      hero: heroImagePath ? await sha256File(heroImagePath) : null,
+      input: inputHash,
+      html: await sha256File(stagedHtml),
+      png: await sha256File(stagedPng),
+      hero: heroHash,
     },
   };
-  await Bun.write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const stagedManifest = await transaction.stageFile(manifestPath);
+  await Bun.write(stagedManifest, `${JSON.stringify(manifest, null, 2)}\n`);
+  if (await preflightArtifacts(paths) !== fingerprint
+    || await sha256File(options.input) !== inputHash
+    || (heroImagePath && await sha256File(heroImagePath) !== heroHash)) {
+    throw new Error("Artifact paths or inputs changed during render; refusing to publish");
+  }
+  // Manifest is the last installed file. A failed rename restores the previous set.
+  await transaction.commit();
   console.log(JSON.stringify({ status: "rendered", png: options.output, html: options.html, manifest: manifestPath, width: dimensions.width, height: dimensions.height, qaSlices: sliceDetails.length }));
+  } finally { await transaction.dispose(); }
 }
 
 if (import.meta.main) {

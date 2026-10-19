@@ -8,6 +8,7 @@
     "validate": "bun Tools/ValidateClassic.ts"
   },
   "dependencies": {
-    "playwright": "1.62.1"
+    "playwright": "1.62.1",
+    "sharp": "0.34.5"
   }
 }

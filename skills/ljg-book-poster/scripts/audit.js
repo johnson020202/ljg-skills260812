@@ -75,12 +75,14 @@
   if (!sections.length) {
     sections = [...poster.children].filter((el) => el.nodeType === 1 && rectOf(el).h > 40);
   }
+  sections = sections.filter(el => visible(el) && rectOf(el).h > 0);
   const sectionInfo = sections.map((el, i) => {
     const r = rectOf(el);
     const raw = el.getAttribute('data-name') ||
       (el.getAttribute('class') || '').trim().split(/\s+/).filter((c) => c && !/^(island|dark|light)$/.test(c)).join('-') ||
       el.tagName.toLowerCase();
-    return { index: i, name: String(i + 1).padStart(2, '0') + '-' + raw, el, x: r.x, y: r.y, h: r.h, right: r.right, bottom: r.bottom, radius: parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0 };
+    const safe = raw.replace(/[\\/\x00-\x1f\x7f<>:"|?*]/g, '-').slice(0, 80) || 'section';
+    return { index: i, name: String(i + 1).padStart(2, '0') + '-' + safe, el, x: r.x, y: r.y, h: r.h, right: r.right, bottom: r.bottom, radius: parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0 };
   });
 
   const posterRect = rectOf(poster);
@@ -113,10 +115,14 @@
   // ---------- walk rendered text nodes ----------
   const lineRects = (node) => {
     const r = document.createRange();
-    r.selectNodeContents(node);
+    const text = node.nodeValue;
+    const first = text.search(/\S/);
+    if (first < 0) return [];
+    r.setStart(node, first);
+    r.setEnd(node, text.trimEnd().length);
     return [...r.getClientRects()]
       .filter((rr) => rr.height > 0 && rr.width > 0)
-      .map((rr) => ({ top: Math.round(rr.top + scrollY0), left: rr.left, right: rr.right, w: rr.width }));
+      .map((rr) => ({ top: rr.top + scrollY0, bottom: rr.bottom + scrollY0, left: rr.left, right: rr.right, w: rr.width }));
   };
 
   const walker = document.createTreeWalker(poster, NodeFilter.SHOW_TEXT);
@@ -138,15 +144,37 @@
   const fontSizes = [];
   let underFloorPx = 0;
   let generatedTextNodes = 0;
+  // Minimum singular value catches shrinking in either axis, including inherited
+  // transforms, individual scale and zoom. Rotation alone keeps the same size.
+  const visualScale = (el, pseudoStyle) => {
+    let matrix = new DOMMatrix();
+    let zoom = 1;
+    const styles = [];
+    if (pseudoStyle) styles.push(pseudoStyle);
+    for (let e = el; e; e = e.parentElement) styles.push(getComputedStyle(e));
+    for (const style of styles) {
+      let local = style.transform === 'none' ? new DOMMatrix() : new DOMMatrix(style.transform);
+      if (style.scale && style.scale !== 'none') {
+        const values = style.scale.split(/\s+/).map(Number);
+        local = local.scale(values[0], values[1] ?? values[0]);
+      }
+      matrix = local.multiply(matrix);
+      zoom *= parseFloat(style.zoom) || 1;
+    }
+    const {a, b, c, d} = matrix;
+    const trace = a*a + b*b + c*c + d*d;
+    const determinant = (a*d - b*c) ** 2;
+    return zoom * Math.sqrt(Math.max(0, (trace - Math.sqrt(Math.max(0, trace*trace - 4*determinant))) / 2));
+  };
   const checkFont = (el, cs, text, pseudo = '') => {
-    const size = parseFloat(cs.fontSize);
+    const size = parseFloat(cs.fontSize) * visualScale(el, pseudo ? cs : null);
     if (!Number.isFinite(size)) return;
     fontSizes.push(size);
-    if (size >= fontFloorPx) return;
+    if (size >= fontFloorPx - 0.000001) return;
     underFloorPx++;
     const r = rectOf(el);
     const section = (sectionInfo.find((s) => r.y >= s.y - 2 && r.y < s.bottom) || {}).name || '';
-    add(1, 'T-MIN-FONT', `计算字号 ${size}px < ${fontFloorPx}px：${text.trim().slice(0, 24)}`, el,
+    add(1, 'T-MIN-FONT', `可见字号 ${size}px < ${fontFloorPx}px：${text.trim().slice(0, 24)}`, el,
       { y: r.y, section, fontSizePx: size, pseudo });
   };
 
@@ -193,25 +221,29 @@
     return smaller > 0 && overlap / smaller > 0.5;
   };
 
-  const lastLineChars = (node) => {
-    const t = node.nodeValue;
-    const r = document.createRange();
-    const pts = [];
-    for (let i = t.length - 1; i >= 0 && pts.length < 24; i--) {
-      r.setStart(node, i);
-      r.setEnd(node, i + 1);
-      const rr = r.getBoundingClientRect();
-      if (rr.height <= 2) continue;
-      pts.unshift({ i, top: Math.round(rr.top + scrollY0), w: rr.width });
+  // Group by formatting block, not text node: <strong> and trailing collapsed
+  // whitespace must not hide the last character. No implicit large-title exemption.
+  const blocks = new Map();
+  const blockOf = (el) => {
+    while (el !== poster && /^(inline|contents)$/.test(getComputedStyle(el).display)) el = el.parentElement;
+    return el;
+  };
+  const clipOf = (el) => {
+    const clip = { left: Math.max(0, posterRect.x), right: Math.min(innerWidth, posterRect.right), top: 0, bottom: pageHeight };
+    for (let e = el; e; e = e.parentElement) {
+      const style = getComputedStyle(e), r = rectOf(e);
+      const sx = e.offsetWidth ? r.w / e.offsetWidth : 1;
+      const sy = e.offsetHeight ? r.h / e.offsetHeight : 1;
+      if (/^(hidden|clip|scroll|auto)$/.test(style.overflowX)) {
+        clip.left = Math.max(clip.left, r.x + e.clientLeft * sx);
+        clip.right = Math.min(clip.right, r.x + (e.clientLeft + e.clientWidth) * sx);
+      }
+      if (/^(hidden|clip|scroll|auto)$/.test(style.overflowY)) {
+        clip.top = Math.max(clip.top, r.y + e.clientTop * sy);
+        clip.bottom = Math.min(clip.bottom, r.y + (e.clientTop + e.clientHeight) * sy);
+      }
     }
-    if (!pts.length) return null;
-    const lastTop = pts[pts.length - 1].top;
-    let count = 0;
-    for (let k = pts.length - 1; k >= 0; k--) {
-      if (pts[k].top === lastTop) count++;
-      else break;
-    }
-    return { chars: count, sampled: pts.length };
+    return clip;
   };
 
   nodes.forEach(({ node, el, cs, text, rects }) => {
@@ -222,24 +254,18 @@
     const r0 = rectOf(el);
     const section = (sectionInfo.find((s) => r0.y >= s.y - 2 && r0.y < s.bottom) || {}).name || '';
 
-    // horizontal overflow / clipped text
-    if (r0.right > posterRect.right + 2 || r0.x < posterRect.x - 2) {
-      add(1, 'T-OVERFLOW', `文字超出画布：${selOf(el)}`, el, { y: r0.y, section });
+    const clip = clipOf(el);
+    if (rects.some(r => r.right > clip.right + 2 || r.left < clip.left - 2 ||
+                        r.top < clip.top - 2 || r.bottom > clip.bottom + 2)) {
+      add(1, 'T-OVERFLOW', `文字被裁切或超出画布：${selOf(el)}`, el, { y: r0.y, section, clip });
     }
+    const block = blockOf(el);
+    if (!blocks.has(block)) blocks.set(block, []);
+    blocks.get(block).push({ node, text, clip });
 
     // giant whole sentence
     if (fontSize > 80 && trimmed.length > 12) {
       add(2, 'T-GIANT', `整句被放大到 ${Math.round(fontSize)}px（应只放大 1 个关键词）：${trimmed.slice(0, 18)}…`, el, { y: r0.y, section });
-    }
-
-    // widow / orphan tail: a wrapped line ending in 1 char (any length) or
-    // 2 chars in body copy. Chinese typography forbids a lone last char.
-    // fontSize cap 110 keeps hero keywords out; the 70px floor replaced the old 64.
-    if (rects.length >= 2 && fontSize <= 110) {
-      const li = lastLineChars(node);
-      if (li && (li.chars <= 1 && trimmed.length >= 2 || li.chars === 2 && trimmed.length >= 8)) {
-        add(2, 'T-WIDOW', `末行只剩 ${li.chars} 个字（孤字行）：${trimmed.slice(-12)}`, el, { y: rects[rects.length - 1].top, section });
-      }
     }
 
     // inline keyword broken across lines
@@ -276,18 +302,116 @@
     }
   });
 
-  // Generated labels and counters are not DOM text nodes.
+  const segmenter = new Intl.Segmenter('zh', { granularity: 'grapheme' });
+  for (const [block, entries] of blocks) {
+    const lines = [];
+    const vertical = getComputedStyle(block).writingMode.startsWith('vertical');
+    const range = document.createRange();
+    for (const {node, text, clip} of entries) {
+      for (const {segment, index} of segmenter.segment(text)) {
+        if (!segment.trim()) continue;
+        range.setStart(node, index);
+        range.setEnd(node, index + segment.length);
+        const r = range.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0 || r.right <= clip.left || r.left >= clip.right ||
+            r.bottom + scrollY0 <= clip.top || r.top + scrollY0 >= clip.bottom) continue;
+        const box = vertical ? {top:r.left, bottom:r.right} : {top:r.top + scrollY0, bottom:r.bottom + scrollY0};
+        let line = lines.find(l => sameLine(l, box));
+        if (!line) { line = {...box, text: '', y:r.top + scrollY0}; lines.push(line); }
+        line.text += segment;
+      }
+    }
+    if (lines.length < 2) continue;
+    const last = lines[lines.length - 1];
+    const chars = [...segmenter.segment(last.text)].length;
+    const text = entries.map(e => e.text.trim()).join('');
+    const bodyCopy = !/^H[1-6]$/.test(block.tagName) && parseFloat(getComputedStyle(block).fontSize) <= 110;
+    if (chars === 1 || (chars === 2 && text.length >= 8 && bodyCopy)) {
+      const section = (sectionInfo.find(s => last.y >= s.y - 2 && last.y < s.bottom) || {}).name || '';
+      add(2, 'T-WIDOW', `末行只剩 ${chars} 个字（孤字行）：${text.slice(-12)}`, block, {y:last.y, section});
+    }
+  }
+
+  // Generated labels, native list markers and counters are not DOM text nodes.
   for (const el of [poster, ...poster.querySelectorAll('*')]) {
     if (!visible(el)) continue;
-    for (const pseudo of ['::before', '::after']) {
+    for (const pseudo of ['::before', '::after', '::marker']) {
       const cs = getComputedStyle(el, pseudo);
-      const content = cs.content.trim();
+      let content = cs.content.trim();
+      if (pseudo === '::marker') {
+        const style = getComputedStyle(el);
+        if (style.display !== 'list-item') continue;
+        if (content === 'normal' && style.listStyleType !== 'none') content = style.listStyleType;
+      }
       if (!content || /^(none|normal|""|'')$/.test(content) || /^url\(/.test(content)) continue;
       if (cs.display === 'none' || cs.visibility !== 'visible' || Number(cs.opacity) <= 0) continue;
       generatedTextNodes++;
       checkFont(el, cs, content, pseudo);
     }
   }
+
+  // Chapter identity repeats are local to an explicitly marked heading group,
+  // not a ban on repeated numbers in maps, body data or lists.
+  const chapterNumber = (raw) => {
+    const value = raw.replace(/\s/g, '').replace(/^第/, '').replace(/章$/, '');
+    if (/^\d+$/.test(value)) return Number(value);
+    const digits = '零一二三四五六七八九';
+    if (value === '十') return 10;
+    if (/^[一二三四五六七八九]?十[一二三四五六七八九]?$/.test(value)) {
+      const [a, b] = value.split('十');
+      return (a ? digits.indexOf(a) : 1) * 10 + (b ? digits.indexOf(b) : 0);
+    }
+    return value.length === 1 && digits.includes(value) ? digits.indexOf(value) : null;
+  };
+  for (const head of poster.querySelectorAll('.sec-head,[data-chapter-heading]')) {
+    if (!visible(head)) continue;
+    const labels = [];
+    const roles = [...head.querySelectorAll('.sec-num,[data-chapter-number],h1,h2,h3,h4,h5,h6,.kicker,[data-chapter-label]')];
+    for (const role of roles.filter(el => !roles.some(other => other !== el && el.contains(other)))) {
+      if (!visible(role)) continue;
+      let text = nodes.filter(n => role.contains(n.el)).map(n => n.text).join('').trim();
+      for (const pseudo of ['::before', '::after']) {
+        const style = getComputedStyle(role, pseudo);
+        if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) <= 0) continue;
+        const literal = style.content.match(/^"([^"\\]*)"$/);
+        if (literal) text = pseudo === '::before' ? literal[1] + text : text + literal[1];
+      }
+      const prefix = text.match(/^(?:第\s*)?([\d零一二三四五六七八九十]+)\s*章/);
+      const value = role.matches('.sec-num,[data-chapter-number]') ? chapterNumber(text) :
+        prefix ? chapterNumber(prefix[1]) : null;
+      if (value !== null) labels.push(value);
+    }
+    if (new Set(labels).size < labels.length) {
+      add(2, 'T-CHAPTER-DUP', '同一章标题组合重复编号；保留唯一大编号，副标签用主题词', head, {y:rectOf(head).y});
+    }
+  }
+
+  // A font-family candidate scan is NOT proof of a rendered glyph: fallback,
+  // aliases and future font versions still need manual inspection. Never rewrite
+  // source quotations, titles or names automatically.
+  const huiwenRiskCharacters = '让药继赞钟钥认讲论证铁';
+  const huiwenCandidates = [];
+  const huiwenRequested = (el, style) => /huiwen|汇文|匯文/i.test(style.fontFamily) ||
+    !!el.closest('[data-glyph-review="huiwen"]');
+  const addHuiwen = (el, style, text, pseudo = '') => {
+    if (!huiwenRequested(el, style)) return false;
+    const characters = [...new Set([...text].filter(c => huiwenRiskCharacters.includes(c)))].join('');
+    if (characters) huiwenCandidates.push({selector:selOf(el), y:rectOf(el).y, pseudo, characters});
+    return true;
+  };
+  let usesHuiwen = false;
+  for (const {el, cs, text} of nodes) usesHuiwen = addHuiwen(el, cs, text) || usesHuiwen;
+  for (const el of [poster, ...poster.querySelectorAll('*')]) {
+    if (!visible(el)) continue;
+    for (const pseudo of ['::before', '::after', '::marker']) {
+      const style = getComputedStyle(el, pseudo), text = style.content;
+      if (/^(none|normal|""|'')$/.test(text) || style.display === 'none' ||
+          style.visibility !== 'visible' || Number(style.opacity) <= 0) continue;
+      usesHuiwen = addHuiwen(el, style, text, pseudo) || usesHuiwen;
+    }
+  }
+  const huiwenReview = {status:usesHuiwen ? 'manual-review-required' : 'not-requested',
+    riskCharacters:huiwenRiskCharacters, candidates:huiwenCandidates};
 
   // ---------- fixed / sticky ----------
   const fixedEls = [...poster.querySelectorAll('*')].filter((el) => {
@@ -306,7 +430,7 @@
 
   return {
     page: { width: Math.round(posterRect.w), height: Math.round(pageHeight), scrollWidth: Math.round(pageWidth) },
-    sections: sectionInfo.map((s) => ({ index: s.index, name: s.name, y: Math.round(s.y), h: Math.round(s.h), bottom: Math.round(s.bottom) })),
+    sections: sectionInfo.map((s) => ({ index: s.index, name: s.name, y: s.y, h: s.h, bottom: s.bottom })),
     counts,
     issues: issues.slice(0, 80),
     fontFloorPx,
@@ -314,5 +438,6 @@
     underFloorPx,
     generatedTextNodes,
     textNodes: nodes.length,
+    huiwenReview,
   };
 })()

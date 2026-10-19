@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -23,8 +24,15 @@ FONT_CANDIDATES = (
 )
 
 
+def font_candidates():
+    windows = Path(os.environ.get('WINDIR') or os.environ.get('SystemRoot') or 'C:/Windows')
+    # CJK-capable bundled fallback; Arial cannot guarantee Chinese label glyphs.
+    bundled = Path(__file__).resolve().parents[1] / 'assets/fonts/LXGWWenKai-Regular.ttf'
+    return (str(windows / 'Fonts/msyh.ttc'), *FONT_CANDIDATES, str(bundled))
+
+
 def font(size: int) -> ImageFont.FreeTypeFont:
-    for path in FONT_CANDIDATES:
+    for path in font_candidates():
         if Path(path).exists():
             try:
                 return ImageFont.truetype(path, size)
@@ -42,13 +50,16 @@ def label_strip(draw, xy, text, fnt, fill=(255, 255, 255), bg=(0, 0, 0)):
 
 
 def overview(png: Path, out: Path, cols: int, section_px: int):
-    im = Image.open(png).convert("RGB")
+    if cols <= 0 or section_px <= 0:
+        raise ValueError('cols and section_px must be positive')
+    with Image.open(png) as source:
+        im = source.convert('RGB')
     W, H = im.size
     rows = max(1, (H + section_px - 1) // section_px)
     cols = max(1, min(cols, rows))
     rows = (rows + cols - 1) // cols
-    cell_w = W // cols
-    cell_h = section_px
+    cell_w = max(1, W // cols)
+    cell_h = max(1, round(min(section_px, H) * cell_w / W))
     gap = 18
     sheet = Image.new("RGB", (cols * cell_w + (cols + 1) * gap, rows * cell_h + (rows + 1) * gap), (28, 28, 30))
     draw = ImageDraw.Draw(sheet)
@@ -58,7 +69,7 @@ def overview(png: Path, out: Path, cols: int, section_px: int):
         if y0 >= H:
             break
         y1 = min(H, y0 + section_px)
-        tile = im.crop((0, y0, W, y1)).resize((cell_w, y1 - y0))
+        tile = im.crop((0, y0, W, y1)).resize((cell_w, max(1, round((y1 - y0) * cell_w / W))), Image.Resampling.LANCZOS)
         cx = gap + (i % cols) * (cell_w + gap)
         cy = gap + (i // cols) * (cell_h + gap)
         sheet.paste(tile, (cx, cy))
@@ -70,16 +81,25 @@ def overview(png: Path, out: Path, cols: int, section_px: int):
 
 def from_sections(slice_dir: Path, out: Path):
     """All section crops in one column, each labeled, scaled to a readable width."""
-    files = sorted(p for p in slice_dir.glob("*.png") if not p.name.startswith("_"))
+    manifest = json.loads((slice_dir / '_sections.json').read_text(encoding='utf-8'))
+    files = []
+    for section in manifest:
+        name = section.get('file', section['name'] + '.png')
+        if Path(name).name != name or not name.endswith('.png'):
+            raise ValueError(f'Invalid section filename: {name}')
+        path = slice_dir / name
+        if path.resolve().parent != slice_dir.resolve():
+            raise ValueError(f'Section escapes directory: {name}')
+        files.append(path)
     if not files:
-        raise SystemExit(f"no section crops in {slice_dir}")
+        raise ValueError(f'no section crops in {slice_dir}')
     width = 760
     fnt = font(30)
     tiles = []
     for f in files:
-        im = Image.open(f).convert("RGB")
-        scale = width / im.width
-        im = im.resize((width, max(1, int(im.height * scale))))
+        with Image.open(f) as source:
+            scale = width / source.width
+            im = source.convert('RGB').resize((width, max(1, int(source.height * scale))), Image.Resampling.LANCZOS)
         tiles.append((f.stem, im))
     pad = 14
     total_h = sum(t.height + 44 + pad for _, t in tiles) + pad

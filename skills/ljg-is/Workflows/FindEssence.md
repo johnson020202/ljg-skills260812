@@ -238,7 +238,7 @@
 
 写入后必须完成全部检查：
 
-1. 运行 `bun ~/.agents/skills/ljg-is/Tools/ValidateNote.ts "{文件路径}"`；非零退出即修复后重跑。
+1. 运行 `bun "{skill_dir}/Tools/ValidateNote.ts" "{文件路径}"`；`{skill_dir}` 必须替换为本次实际加载的 `ljg-is/SKILL.md` 所在绝对目录，不能猜全局路径或回退旧副本。非零退出即修复后重跑。
 2. 读回全文，确认对话中的「本质」与文件内 `核心：` 完全一致。
 3. Org 输出在可用的 Emacs/Denote 环境中确认：文件名与 identifier 一致、Denote 接受、Notes 索引或 consult-notes 可见、`org-lint` 无阻断问题。Markdown 输出由同一校验器检查 YAML 元数据、标题顺序与 identifier。
 4. 最终只报告核心、完整表达、「代入 / 操作 / 变化 / 点题」、「结构式 / 变量 / 迁移 / 边界」、文件绝对路径和验证结果；不要把内部六道测试重新讲一遍。

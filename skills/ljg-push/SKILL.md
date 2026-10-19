@@ -1,117 +1,68 @@
 ---
 name: ljg-push
-description: 把 ~/.agents/skills/ljg-* 里所有更新过的 skills 同步到 github repo (ljg-skills)，先推 master 分支（org-mode 输出风格），再切 md 分支（markdown 输出风格）做基础 markdown 化后推。Use when user says '/ljg-push', 'push skills', '推送 skills', '同步 skills', 'sync ljg', or whenever ljg-* skills get updated and need shipping. NOT FOR pushing non-ljg skills or arbitrary git repos.
+description: 安全发布 ljg-* skills 到 johnson020202/ljg-skills260812 的 master 与 md 分支。先只读预检，在临时仓库生成两种输出，最后原子推送。Use when user says '/ljg-push', 'push skills', '推送 skills', '同步 skills', or 'sync ljg'. NOT FOR arbitrary repositories or installation.
 user_invocable: true
 ---
 
-# ljg-push: 推送 ljg-* skills
+# ljg-push
 
-把本地 `~/.agents/skills/ljg-*` 里改过的 skills，一键同步到 github repo，覆盖 master 和 md 两个分支。
+本地安装源是 master 风格输入；`md` 是确定性生成结果，不是第二个可手工编辑的源。调用前先按 `Workflows/Push.md` 检查范围。依赖 Python 3.9+ 标准库、Git、Bash，无额外包。
 
-## 仓库路径（硬编码）
+## 调用
 
-```
-SKILLS_REPO="$HOME/code/ljg-skills"     # 本地工作 repo
-SKILLS_LOCAL="$HOME/.agents/skills"      # 本地 skill 源
-REPO_URL="git@github.com:lijigang/ljg-skills.git"
-```
-
-如果 `$SKILLS_REPO` 不存在，脚本会自动 clone。如果它存在但不是 ljg-skills 的 git repo，脚本会报错退出（不破坏现有目录）。
-
-## 两条分支的差异
-
-| 分支 | 输出格式 | 文件扩展 | 加粗 | 文件头 |
-|------|---------|---------|------|--------|
-| `master`（默认） | org-mode | `.org` | `*bold*` | `#+title:` 等 |
-| `md` | markdown | `.md` | `**bold**` | YAML frontmatter |
-
-`~/.agents/skills/` 里的 skill 是 *master 风格*（源版本）。md 分支的差异由脚本自动转换 + 必要时手工补。
-
-脚本推完 `md` 后会自动切回 `master`。本地 `$HOME/code/ljg-skills` 应该始终停在源分支，方便下次查看和安装。
-
-## 工作流
-
-按 `Workflows/Push.md` 步骤执行 → 调用 `Tools/Push.sh`。
-
-## README 一致性（硬 gate）
-
-每次 push 前，脚本强制做一件事：*把 README 跟 local skills 对一遍*。
-
-- 列出 `~/.agents/skills/ljg-*` 全部 skill 名
-- grep `$SKILLS_REPO/README.md` 里出现的 `ljg-xxx`
-- 找出 local 有但 README 没有的——*几乎肯定意味着 README 漏更新*
-- 命中 → push 中止，报告差异
-
-每次 push 都是检视 README 的机会。问自己：
-
-1. *新增 skill 了吗*？README 的 skill 清单 / 安装命令需要加一行
-2. *删了 skill 吗*？README 对应行要删
-3. *某个 skill 的描述大改了吗*？README 的简介可能要同步
-
-确认 README 已审、确实不需要更新时，绕过 gate：
+从**本次实际加载的技能目录**执行，不回退到旧全局副本。
 
 ```bash
-/ljg-push --skip-readme-check
+bash {skill_dir}/Tools/Push.sh --dry-run
+bash {skill_dir}/Tools/Push.sh --repo /path/to/ljg-skills260812 --local /path/to/skills
+bash {skill_dir}/Tools/Push.sh --skill ljg-qa --skill ljg-paper
 ```
 
-## 自动转换的范围
+| 参数 | 默认及语义 |
+|------|------------|
+| `--repo` / `SKILLS_REPO` | `~/code/ljg-skills260812`，必须已存在，不自动 clone |
+| `--local` / `SKILLS_LOCAL` | `~/.agents/skills`，只读安装源 |
+| `--origin` / `REPO_URL` | 默认仅接受此 fork 的精确 HTTPS / SSH URL；覆盖值必须与 origin fetch、push URL 完全一致 |
+| `--source-branch` / `--md-branch` | `master` / `md`，当前 checkout 必须是 source 分支；脚本不切分支 |
+| `--skill` | 可重复，未给出时选择源目录全部 `ljg-*` 及唯一兼容名 `fix-ljg-org-to-md`；不接受任意前缀或路径 |
+| `--force` | 兼容旧选项；选择全部本地技能（有 `--skill` 时仍限该列表），不强推、不跳过安全检查、无实际变更不 bump |
+| `--dry-run` | 只读本地文件和 Git 对象；不写临时文件或 index、不联网、不提交、不切分支 |
+| `--skip-readme-check` | 仅绕过 README 技能名称门禁，不绕过其他检查 |
+| `--message` | 提交说明，自动追加集合版本 |
 
-md 分支同步时自动转换（2026-06-12 起含 org 文件本体）：
+默认身份是 `johnson020202/ljg-skills260812`。例如 `https://github.com/johnson020202/ljg-skills260812.git` 和 `git@github.com:johnson020202/ljg-skills260812.git` 均允许；相似前缀、其他 fork、多 push URL、不同 fetch/push URL 拒绝。显式 origin 可用于已批准的私有镜像。
 
-- *org 文件本体*：skill 内每个 `.org` 文件（assets/ 除外）转成同名 `.md` 并删除原件——org 头块→YAML frontmatter（含 `---` 围栏，`filetags`→`tags`）、`*` 标题→`#` 标题（层级保留）、`#+ATTR_*` 行删除、`[[file:x]]`→`![](x)`、`#+begin_src`→``` 围栏。Markdown 与运行时文本文件（如 `.ts` / `.js` / `.json` / `.sh`）里对实际被改名文件的引用同步改写
-- 文件扩展引用：`__qa.org` → `__qa.md`、`__paper.org` → `__paper.md` 等（denote 命名约定）
-- 关键词：`org-mode` → `markdown`、`Org-mode` → `Markdown`
-- org 式格式指令：`加粗用 *bold*（单星号）…` → `加粗用 **bold**（双星号）`、`标题层级从 * 开始` → `从 # 开始`、`Org 文件头` → `Markdown 文件头`、行首 `#+title:` 等 8 个示例键 → YAML 键行
-- 结构化强调标签：行首 `- *标签*：` → `- **标签**：`；紧邻这类标签的 `org` 围栏同步改为 `markdown`
+旧入口 `scripts/sync-push.sh <skill-name> <commit-message> [选项]` 仅包装此发布器，保留 `~/.claude/ljg-skills-repo` / `~/.claude/skills` 默认路径，但也执行双分支安全预检；可用上述选项覆盖路径。
 
-*仍不自动转换*（按需手工）：
+## 安全契约
 
-- 正文里的 `*bold*` 标记：markdown 里 `*x*` 是斜体，盲替会破坏文档自身格式；只有「行首 bullet + 全角冒号」标签会安全转换
-- SKILL.md 示例块里转出的 YAML 键行不带 `---` 围栏（已知整容项，不影响语义）
+1. **干净仓库才可发布**：拒绝 staged、unstaged、untracked、未完成 rebase/merge、隐藏变更的 index 标志及重定向 Git 环境。README 和根工具改动应由操作者先正常提交；发布器只读取已提交 source，不夹带工作目录内容。
+2. **明确文件清单**：技能名仅允许 `ljg-*` 的受限命名及精确兼容名 `fix-ljg-org-to-md`；源和目标 realpath 必须在指定根目录，拒绝 symlink、submodule、非普通文件和源 hardlink。source 暂存实际变更的技能文件及两份版本 JSON；md 另同步根文件白名单 `README.md`、`CLAUDE.md`、`LICENSE`、`.gitignore`、`scripts/**`、`docs/**`、`.github/**`，包含内容、执行模式及删除。根范围常量为 `ROOT_PATHS`；`.claude-plugin/` 仍仅管理两份元数据。逐项核对 staged 清单和提交回读，不整目录夹带工作树。
+3. **安装源需人工审查**：除 `.git`、`node_modules`、`__pycache__`、`.DS_Store`、`.pyc`、`.log` 外，选中技能的普通文件都会纳入。尤其应移走凭据与临时文件；不要把 `.gitignore` 当发布授权。
+4. **用户仓库不写入**：构建和本地提交只在 disposable Git 仓库发生。绝不执行 `reset --hard`、checkout、pull、fetch 或 rebase；失败不会改用户 HEAD、index、文件，也不自动重试推送。
+5. **版本结构化更新**：先校验 plugin、marketplace 顶层、对应 `plugins[]` 的三处 `major.minor.patch` 一致；只更新这三处。仅 source 技能实际变化才 bump patch，写入后和提交后均核对。只有根工具更新时仍生成 md 提交，但不 bump、不生成额外 source 提交；两者都无变化才是 no-op。不会顺带改其他插件版本或创建 tag。
+6. **远端明确且原子**：正式发布先只读 `ls-remote`，要求 remote 分支和本地基线一致；构建成功后，以完整 commit→refs/heads refspec、精确旧 SHA lease，一次 `push --atomic` 发布两分支。提交保持父链，不改写历史。服务端不支持原子 push 就失败，绝不降级为可能半发布的两次 push。
+7. **dry-run 不等于发布验证**：它仍拒绝本地不安全状态；README 缺项仅警告，但不会检查远端新旧或凭据。
 
-## Voice Notification
+成功后输入仓库依然保持原样，可能落后远端。操作者应明确 fetch 并 fast-forward 后再发布；脚本不会替你更新或清理。网络中断若结果不确定，应先查询远端 refs 再决定重试，不盲目重推。
+
+## Markdown 来源与迁移
+
+`md` 的整个 `skills/` 必须等于记录的 source 提交经过当前转换器的结果；上述根文件白名单必须逐字节、逐执行模式等于同一个 source 基线，人工补丁不能被静默覆盖。生成提交用 `LJG-Source: <sha>` 记录 source，并将它保留为父提交。
+
+- 首次没有 md 分支时，从已验证 source 的提交树创建生成分支，继承已提交根工具；忽略文件、未提交文件不会被采集。
+- 已有来源记录时，先对照记录的 base 完整检查技能、根文件和元数据；无漂移才将根范围更新到当前 source。这样 setup/check/install/CI/docs 不会继续停留在旧 md 版本。
+- 老 md 没有来源记录时，仅当全部技能内容等于当前 source 的转换结果、根范围等于当前 source，才可进入生成流程。根工具缺失或落后也不会猜测成“可以覆盖”。
+- 管理范围内若有 branch-only 文件、手改内容、模式变化、删除或转换器升级造成的差异，直接拒绝，列出路径。范围外已提交文件保留目标父树原状；已有 md 不会同步 source 新增的任意根文件。
+- 把有用差异纳入 source 或转换规则并正常评审；保留旧 md 的备份 ref，人工核对新生成结果，再显式完成迁移。本工具没有“忽略差异”“自动丢弃 md”的开关，也不自动迁移或删除真实旧 md 分支。
+- 已生成 md 的两份元数据须精确等于记录 source；旧分支只允许内部一致的三处集合版本不同，非版本字段、其他插件或文件模式差异仍拒绝。
+
+转换保留旧有范围：非 assets 的 Org 文件转 Markdown、文件引用同步改名、已知格式指令与结构化强调标签转换、残留检查。正文单星号不做猜测性替换；Org 和同名 Markdown 输出碰撞直接拒绝，绝不覆写一个来保留另一个。
+
+## 验证
 
 ```bash
-curl -s -X POST http://localhost:31337/notify \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Running Push in ljg-push"}' \
-  > /dev/null 2>&1 &
+python3 scripts/test_publish.py
 ```
 
-输出文本：`Running **Push** in **ljg-push**...`
-
-## Examples
-
-*Example 1: 一键推送*
-
-```
-User: /ljg-push
-→ 检测 ~/.agents/skills/ljg-* 中跟 repo 有差异的 skills
-→ master: rsync + bump version + commit + push
-→ md: rsync + mdize + bump version + commit + push
-→ 切回 master
-→ 报告：哪些 skills 推了，新版本号，剩余手工差异
-```
-
-*Example 2: 看会推什么但不真推*
-
-```
-User: /ljg-push --dry-run
-→ 列出会被同步的 skills
-→ 列出会做的 markdown 化转换
-→ 不执行 rsync / commit / push
-```
-
-## Gotchas
-
-- *README 漂移是最容易被忽略的*——加完新 skill 直接推，README 还停在老清单。脚本现在有硬 gate 拦这一刀；拦下来时不要无脑加 `--skip-readme-check`，先去看一下 README
-- *脚本前提是 git credentials 已配好*（ssh key 或 PAT）—— ljg-push 不处理认证，认证失败时直接报错
-- *master 必须先推*——md 分支的 markdown 化基于 master 的 org 版本做转换。反过来推会破坏顺序
-- *untracked 杂物（如 `assets/measure.js`）会被 rsync 同步到 repo*——如果不想推，先在本地删掉，或加进 `.gitignore`
-- *org 文件本体已自动转换（2026-06-12 起）*——template.org 等会被转成 .md 并删除原件，每次推送重新生成（rsync --delete 冲掉也无妨，幂等）。遗留手工项只剩正文里的 `*bold*` 标记。新增带复杂构件的 org reference 文件后，先 `--dry-run` 或沙盒跑一遍 mdize 看转换效果
-- *重命名引用可能藏在运行时代码里*——例如测试用 `new URL("../Template.org", import.meta.url)` 读取模板；只改 Markdown 文档会让 md 分支缺文件。转换器会按本次实际转出的 basename 精确改写 `.ts` / `.js` / `.json` / `.sh` 等文本消费者，同时保留没有对应实体文件的 Org 测试夹具字符串
-- *结构化标签不能靠枚举示例词*——`x`、`f(x)` 之外还会出现「主体/边界」「代入」等真实标签；转换器按 `- *标签*：` 的结构识别，发布后仍要扫描 md 文件是否残留单星标签
-- *Markdown 转换不能只匹配小写 `org`*——技能正文常写 `Org`、内联 `#+description`，Org 模板的 `# 注释` 在 Markdown 里还会变成标题；转换器统一处理这些形式，并在 md commit 前扫描输出指令、Org 标记和残留 `.org` 文件
-- *脚本会自动 bump patch version 在 plugin.json + marketplace.json*——如果你想 bump minor / major，先手动改完再跑脚本，脚本只追加 patch
-- *如果 md 分支的远端比本地新（继刚另一台机器推过）*，脚本会 `pull --rebase` 失败时尝试一次 `reset --hard origin/md` 重新应用——这会丢弃本地未推的 md 分支 commit。脚本前会提示
-- *当前路径*：skill 源固定在 `~/.agents/skills/`，工作 repo 固定在 `~/code/ljg-skills/`；不要从历史备份目录读取或推送
+专项测试使用临时 HOME、隔离 Git 配置/hooks 和禁止真实传输的 Git stub；不要用真实发布替代回归验证。

@@ -11,6 +11,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT="assets/fonts"
 mkdir -p "$OUT"
+WORK=$(mktemp -d "$OUT/.fetch-XXXXXX")
+trap 'rm -rf "$WORK"' EXIT  # only this invocation's owned staging directory
+
+verified() {
+  [ -f "$OUT/$1" ] && shasum -a 256 -c <<<"$2  $OUT/$1" >/dev/null 2>&1
+}
 
 fetch() {
   local name="$1" url="$2" sha="$3"
@@ -20,7 +26,7 @@ fetch() {
   fi
   echo "FETCH $name"
   local tmp
-  tmp=$(mktemp)
+  tmp="$WORK/download"
   curl -fL --retry 3 -o "$tmp" "$url"
   if ! shasum -a 256 -c <<<"$sha  $tmp" >/dev/null 2>&1; then
     echo "ERROR: checksum mismatch for $name (upstream may have changed; pin a release tag URL)" >&2
@@ -42,46 +48,50 @@ fetch LXGWNeoXiHei.ttf \
   "893cfbec604768f03785ab4f369508de68c274273359a5cadee17e2852975d5c"
 
 # LXGW Marker Gothic ships as a zip; extract the TTF from it.
-if [ ! -f "$OUT/LXGWMarkerGothic-Regular.ttf" ]; then
+if ! verified LXGWMarkerGothic-Regular.ttf dfc9b27ef9e83024d5926d4a1feb70604eaf8c16aa73659c81d75a22accadae4; then
   echo "FETCH LXGWMarkerGothic-Regular.ttf (from release zip)"
-  tmpzip=$(mktemp)
+  tmpzip="$WORK/archive.zip"
   curl -fL --retry 3 -o "$tmpzip" \
     "https://github.com/lxgw/LxgwMarkerGothic/releases/download/v1.004/LxgwMarkerGothic-v1.004.zip"
-  python3 - "$tmpzip" "$OUT/LXGWMarkerGothic-Regular.ttf" <<'PY'
+  python3 - "$tmpzip" "$WORK/LXGWMarkerGothic-Regular.ttf" <<'PY'
 import sys, zipfile, hashlib
 want_sha = "dfc9b27ef9e83024d5926d4a1feb70604eaf8c16aa73659c81d75a22accadae4"
 with zipfile.ZipFile(sys.argv[1]) as archive:
     data = archive.read("LxgwMarkerGothic-v1.004/fonts/ttf/LXGWMarkerGothic-Regular.ttf")
-assert hashlib.sha256(data).hexdigest() == want_sha, "marker gothic checksum mismatch"
+if hashlib.sha256(data).hexdigest() != want_sha:
+    raise SystemExit("marker gothic checksum mismatch")
 open(sys.argv[2], "wb").write(data)
 PY
   rm -f "$tmpzip"
+  mv "$WORK/LXGWMarkerGothic-Regular.ttf" "$OUT/LXGWMarkerGothic-Regular.ttf"
   echo "OK    LXGWMarkerGothic-Regular.ttf"
 else
-  echo "OK    LXGWMarkerGothic-Regular.ttf (already present)"
+  echo "OK    LXGWMarkerGothic-Regular.ttf (already present, checksum verified)"
 fi
 fetch huiwen-mincho.ttf \
   "https://raw.githubusercontent.com/bosswnx/huiwenmincho-improved/40b9dbb9bfa51bc4979b62d0dcd3bc064c5ea049/%E5%8C%AF%E6%96%87%E6%98%8E%E6%9C%9D%E9%AB%94.ttf" \
   "90bb5b835fd5841a46fa8fca4fe1c82aeb4b9c02be15eadc3effc60dad4fef58"
 
 # Smiley Sans ships as a zip; extract the oblique OTF from it.
-if [ ! -f "$OUT/SmileySans-Oblique.otf" ]; then
+if ! verified SmileySans-Oblique.otf 139b5dcbe70d6d52de85a62d148784c6af4bd161e38fdb62ba0c1e7e5065fca6; then
   echo "FETCH SmileySans-Oblique.otf (from release zip)"
-  tmpzip=$(mktemp)
+  tmpzip="$WORK/archive.zip"
   curl -fL --retry 3 -o "$tmpzip" \
     "https://github.com/atelier-anchor/smiley-sans/releases/download/v2.0.1/smiley-sans-v2.0.1.zip"
-  python3 - "$tmpzip" "$OUT/SmileySans-Oblique.otf" <<'PY'
+  python3 - "$tmpzip" "$WORK/SmileySans-Oblique.otf" <<'PY'
 import sys, zipfile, hashlib
 want_sha = "139b5dcbe70d6d52de85a62d148784c6af4bd161e38fdb62ba0c1e7e5065fca6"
 with zipfile.ZipFile(sys.argv[1]) as archive:
     data = archive.read("SmileySans-Oblique.otf")
-assert hashlib.sha256(data).hexdigest() == want_sha, "smiley-sans checksum mismatch"
+if hashlib.sha256(data).hexdigest() != want_sha:
+    raise SystemExit("smiley-sans checksum mismatch")
 open(sys.argv[2], "wb").write(data)
 PY
   rm -f "$tmpzip"
+  mv "$WORK/SmileySans-Oblique.otf" "$OUT/SmileySans-Oblique.otf"
   echo "OK    SmileySans-Oblique.otf"
 else
-  echo "OK    SmileySans-Oblique.otf (already present)"
+  echo "OK    SmileySans-Oblique.otf (already present, checksum verified)"
 fi
 
 cp -f "$(dirname "$0")/../assets/LICENSE-CC0.txt" "$OUT/LICENSE-CC0-huiwen-mincho.txt" 2>/dev/null || true

@@ -204,8 +204,10 @@ ASCII 图放进 Org 的 `#+begin_example` / `#+end_example`，宽度不超过 80
 写入 Org 后运行：
 
 ```sh
-bun {skill_dir}/scripts/validate_note.ts /absolute/path/to/note.org \
+bun "{skill_dir}/scripts/validate_note.ts" /absolute/path/to/note.org \
   --coverage /absolute/path/to/coverage-map.md
 ```
 
-检查器负责结构、后台材料等级、Denote identifier、来源位置标签、图形宽度与完整拆书覆盖；讲解是否准确，仍要对照原文读回关键转折。
+`{skill_dir}` 替换为本次实际加载的 `ljg-book/SKILL.md` 所在绝对目录，不猜全局安装位置。Markdown 元数据用 Bun 内建 YAML 解析（已验证 Bun 1.3.14），支持标准 frontmatter，也保留文件起始、空行结束的旧式无分隔符头部。
+
+检查器负责结构、后台材料等级、Denote identifier、来源位置句式、图形宽度与完整拆书覆盖。四类覆盖必须各有非空位置、说明与证据；普通方位词、书名不作硬错误，无法判断的来源词只提示人工复核。讲解和证据是否真实准确，仍要对照原文读回关键转折。
