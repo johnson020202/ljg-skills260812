@@ -522,19 +522,59 @@
   }
 
   function latexBody(raw) {
-    let value = raw
-      .replace(/\\cdot/g, "·")
-      .replace(/\\times/g, "×")
-      .replace(/\\propto/g, "∝")
-      .replace(/\\alpha/g, "α")
-      .replace(/\\beta/g, "β")
-      .replace(/\\gamma/g, "γ");
-    value = escapeHtml(value);
-    value = value.replace(/\^\{([^{}]+)\}/g, "<sup>$1</sup>");
-    value = value.replace(/\^([A-Za-z0-9αβγ+\-]+)/g, "<sup>$1</sup>");
-    value = value.replace(/_\{([^{}]+)\}/g, "<sub>$1</sub>");
-    value = value.replace(/_([A-Za-z0-9]+)/g, "<sub>$1</sub>");
-    return value;
+    // Deliberately finite offline subset: characters, groups, six whole commands,
+    // and single-token scripts. Unknown/malformed input falls back as a whole.
+    const commands = { "\\cdot": "·", "\\times": "×", "\\propto": "∝", "\\alpha": "α", "\\beta": "β", "\\gamma": "γ" };
+    if (raw.length > 10000) return null;
+    let cursor = 0;
+    function atom(depth) {
+      if (depth > 32 || cursor >= raw.length) throw new Error("Missing math token");
+      const char = raw[cursor];
+      if (char === "{") {
+        cursor++;
+        const value = sequence(depth + 1, true);
+        if (!value) throw new Error("Empty math group");
+        return value;
+      }
+      if (char === "\\") {
+        const command = raw.slice(cursor).match(/^\\[A-Za-z]+/);
+        if (!command || !Object.hasOwn(commands, command[0])) throw new Error("Unsupported math command");
+        cursor += command[0].length;
+        return commands[command[0]];
+      }
+      if (/[}\^_$]/.test(char)) throw new Error("Unexpected math token");
+      const token = String.fromCodePoint(raw.codePointAt(cursor));
+      cursor += token.length;
+      return escapeHtml(token);
+    }
+    function sequence(depth, grouped) {
+      let result = "";
+      while (cursor < raw.length && raw[cursor] !== "}") {
+        let value = atom(depth);
+        const scripts = new Set();
+        while (cursor < raw.length) {
+          const match = raw.slice(cursor).match(/^\s*([_^])/);
+          if (!match) break;
+          const kind = match[1];
+          if (scripts.has(kind) || !value.trim()) throw new Error("Repeated or missing script base");
+          scripts.add(kind);
+          cursor += match[0].length;
+          while (/\s/.test(raw[cursor] || "")) cursor++;
+          const body = atom(depth + 1);
+          value += kind === "^" ? "<sup>" + body + "</sup>" : "<sub>" + body + "</sub>";
+        }
+        result += value;
+      }
+      if (grouped) {
+        if (raw[cursor] !== "}") throw new Error("Unclosed math group");
+        cursor++;
+      }
+      return result;
+    }
+    try {
+      const result = sequence(0, false);
+      return cursor === raw.length ? result : null;
+    } catch { return null; }
   }
 
   function renderPlainAware(text) {
@@ -548,8 +588,11 @@
   function renderMathAware(text) {
     const exactDisplay = text.trim().match(/^\$\$([\s\S]+)\$\$$/);
     const exactInline = text.trim().match(/^\$(?![\d?])([^$\n]+)\$$/);
-    if (exactDisplay) return '<span class="math math-display">' + latexBody(exactDisplay[1]) + "</span>";
-    if (exactInline) return '<span class="math math-display">' + latexBody(exactInline[1]) + "</span>";
+    const exact = exactDisplay || exactInline;
+    if (exact) {
+      const rendered = latexBody(exact[1]);
+      return rendered === null ? escapeHtml(text) : '<span class="math math-display">' + rendered + "</span>";
+    }
 
     const pattern = /\$\$([\s\S]+?)\$\$|\$(?![\d?])([^$\n]+?)\$/g;
     let result = "";
@@ -557,7 +600,8 @@
     for (const match of text.matchAll(pattern)) {
       const at = match.index ?? 0;
       result += renderPlainAware(text.slice(cursor, at));
-      result += '<span class="math">' + latexBody(match[1] ?? match[2]) + "</span>";
+      const rendered = latexBody(match[1] ?? match[2]);
+      result += rendered === null ? escapeHtml(match[0]) : '<span class="math">' + rendered + "</span>";
       cursor = at + match[0].length;
     }
     result += renderPlainAware(text.slice(cursor));

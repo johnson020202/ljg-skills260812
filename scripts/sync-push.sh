@@ -1,24 +1,16 @@
 #!/bin/bash
-# Usage: sync-push.sh <skill-name> <commit-message>
-# Syncs a local ljg-* skill to the repo and pushes.
-
+# Compatibility: sync-push.sh <skill-name> <commit-message> [publisher options]
+# Uses the same safety checks and dual-branch publisher, never a separate sync path.
 set -euo pipefail
-
+if [ "$#" -lt 2 ]; then
+  printf 'Usage: %s <skill-name> <commit-message> [--dry-run ...]\n' "$0" >&2
+  exit 2
+fi
 SKILL="$1"
 MSG="$2"
-REPO="$HOME/.claude/ljg-skills-repo"
-LOCAL="$HOME/.claude/skills/$SKILL"
-TARGET="$REPO/skills/$SKILL"
-
-if [ ! -d "$LOCAL" ]; then
-  echo "ERROR: $LOCAL does not exist" >&2
-  exit 1
-fi
-
-cd "$REPO"
-git pull --rebase --quiet
-rsync -av --delete --exclude='.git' "$LOCAL/" "$TARGET/"
-git add "skills/$SKILL"
-git diff --cached --quiet && { echo "No changes to push."; exit 0; }
-git commit -m "$MSG"
-git push
+shift 2
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+exec bash "$SCRIPT_DIR/../skills/ljg-push/Tools/Push.sh" \
+  --repo "${SKILLS_REPO:-$HOME/.claude/ljg-skills-repo}" \
+  --local "${SKILLS_LOCAL:-$HOME/.claude/skills}" \
+  --skill "$SKILL" --message "$MSG" "$@"

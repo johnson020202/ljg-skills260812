@@ -1,10 +1,10 @@
 ---
-title: 拆书：《{书名}》
-subtitle: {作者} | {这本书让哪种旧看法发生了什么变化}
-description: {正文写完后再补：用一两句压缩贯穿张力、关键改写与成立边界}
-date: [{YYYY-MM-DD Day HH:MM}]
-tags: book {领域}
-identifier: {YYYYMMDDTHHMMSS}
+title: "拆书：《{书名}》"
+subtitle: "{作者} | {这本书让哪种旧看法发生了什么变化}"
+description: "{正文写完后再补：用一两句压缩贯穿张力、关键改写与成立边界}"
+date: "{YYYY-MM-DD Day HH:MM}"
+tags: ["book", "{领域}"]
+identifier: "{YYYYMMDDTHHMMSS}"
 ---
 
 <!-- 下面三个标题只表示常见的起步、回流与返程。请按真实变化合并、拆分或增加标题。 -->

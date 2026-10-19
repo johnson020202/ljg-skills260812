@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { validateNoteText } from "./ValidateNote";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const filePath = "/tmp/20260801T010203--本质-taxi__is.org";
 const markdownFilePath = "/tmp/20260801T010203--本质-taxi__is.md";
@@ -100,6 +103,116 @@ function legacyNote(): string {
 function errorsFor(content: string, path = filePath): string[] {
   return validateNoteText(path, content).errors;
 }
+
+test("TXT-08 documented validator command works from project installation without a global copy", () => {
+  const workflow = readFileSync(new URL("../Workflows/FindEssence.md", import.meta.url), "utf8");
+  const command = workflow.match(/`(bun [^`]*ValidateNote\.ts[^`]*)`/)?.[1];
+  expect(command).toContain('"{skill_dir}/Tools/ValidateNote.ts"');
+  const root = mkdtempSync(join(tmpdir(), "is project install "));
+  try {
+    const skillDir = join(root, ".agents/skills/ljg-is");
+    const home = join(root, "empty-home");
+    mkdirSync(join(skillDir, "Tools"), { recursive: true });
+    mkdirSync(home);
+    copyFileSync(new URL("./ValidateNote.ts", import.meta.url), join(skillDir, "Tools/ValidateNote.ts"));
+    const notePath = join(root, "20260801T010203--本质-taxi__is.org");
+    writeFileSync(notePath, goodNote());
+    const result = Bun.spawnSync(["/bin/sh", "-c", command!.replace("{skill_dir}", skillDir).replace("{文件路径}", notePath)], {
+      cwd: root, env: { ...process.env, HOME: home },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.toString()).status).toBe("ok");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+describe("TXT-02/04 metadata regressions", () => {
+  for (const [field, value] of [
+    ["title", '"本质：Taxi"'], ["title", "'本质：Taxi'"], ["identifier", '"20260801T010203"'],
+    ["schema", "'ljg-is-v2'"], ["tags", '["is"]'], ["tags", "['is', 'test']"],
+    ["tags", "\n  - is\n  - test"], ["tags", '"is,test"'], ["date", '"2026-08-01 01:02"'],
+  ]) {
+    test(`accepts parsed YAML ${field}: ${value}`, () => {
+      const input = goodMarkdownNote().replace(new RegExp(`^${field}:.*$`, "m"), `${field}: ${value}`);
+      expect(validateNoteText(markdownFilePath, input).ok).toBe(true);
+    });
+  }
+
+  test("accepts CRLF, BOM, YAML comments and end-of-document delimiter", () => {
+    const input = "\uFEFF" + goodMarkdownNote().replace("schema: ljg-is-v2", "schema: ljg-is-v2 # version").replace("\n---\n", "\n...\n").replace(/\n/g, "\r\n");
+    expect(validateNoteText(markdownFilePath, input).ok).toBe(true);
+  });
+
+  test("does not treat frontmatter text as note body", () => {
+    const input = goodMarkdownNote().replace("schema: ljg-is-v2", "schema: ljg-is-v2\nsummary: |\n  # not a heading\n  核心：not the core\n# ignored YAML comment");
+    expect(validateNoteText(markdownFilePath, input).ok).toBe(true);
+  });
+
+  for (const [name, mutate] of [
+    ["no delimiters", (input: string) => input.replace(/^---\n/, "").replace("\n---\n", "\n")],
+    ["no closing delimiter", (input: string) => input.replace("\n---\n", "\n")],
+    ["frontmatter after prose", (input: string) => `preface\n${input}`],
+    ["malformed YAML", (input: string) => input.replace("tags: [is]", "tags: [is")],
+    ["non-mapping YAML", (input: string) => input.replace(/^---[\s\S]*?\n---/, "---\n- is\n---")],
+  ] as const) {
+    test(`rejects ${name}`, () => {
+      const result = validateNoteText(markdownFilePath, mutate(goodMarkdownNote()));
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toContain("frontmatter");
+    });
+  }
+
+  for (const [field, value] of [["title", "null"], ["date", "[]"], ["identifier", "[20260801T010203]"], ["schema", "[ljg-is-v2]"], ["schema", "null"], ["tags", '{is: true}'], ["tags", '[is, 42]']]) {
+    test(`rejects wrong YAML type ${field}: ${value}`, () => {
+      const input = goodMarkdownNote().replace(new RegExp(`^${field}:.*$`, "m"), `${field}: ${value}`);
+      expect(validateNoteText(markdownFilePath, input).ok).toBe(false);
+    });
+  }
+
+  for (const field of ["title", "date", "identifier", "filetags", "schema"]) {
+    test(`rejects empty same-line Org ${field}`, () => {
+      const input = goodNote().replace(new RegExp(`^#\\+${field}:.*$`, "m"), `#+${field}: \t`);
+      expect(validateNoteText(filePath, input).ok).toBe(false);
+    });
+  }
+
+  for (const [field, value] of [["title", '"本质：{目标}"'], ["date", '"{日期}"'], ["tags", '[is, "{标签}"]']]) {
+    test(`review regression: rejects parsed metadata placeholder in ${field}`, () => {
+      const input = goodMarkdownNote().replace(new RegExp(`^${field}:.*$`, "m"), `${field}: ${value}`);
+      const result = validateNoteText(markdownFilePath, input);
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toContain("占位符");
+    });
+  }
+
+  test("review regression: recursively checks nested metadata strings", () => {
+    const input = goodMarkdownNote().replace("schema: ljg-is-v2", 'schema: ljg-is-v2\nextra:\n  sources:\n    - title: "{来源}"');
+    const result = validateNoteText(markdownFilePath, input);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join("\n")).toContain("占位符");
+  });
+
+  test("review regression: ignores placeholders inside YAML comments", () => {
+    const input = goodMarkdownNote().replace("schema: ljg-is-v2", "schema: ljg-is-v2 # TODO {schema}\n# title: 本质：{目标}\n# date: {日期}");
+    expect(validateNoteText(markdownFilePath, input).ok).toBe(true);
+  });
+
+  test("review regression: unsupported recursive YAML aliases return a frontmatter error", () => {
+    const input = goodMarkdownNote().replace("schema: ljg-is-v2", "schema: ljg-is-v2\nextra: &cycle\n  title: 已填写\n  self: *cycle");
+    const result = validateNoteText(markdownFilePath, input);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join("\n")).toContain("frontmatter");
+  });
+
+  test("review regression: valid YAML aliases with filled strings are accepted", () => {
+    const input = goodMarkdownNote().replace("schema: ljg-is-v2", "schema: ljg-is-v2\nextra: &shared\n  title: 已填写\nalias: *shared");
+    expect(validateNoteText(markdownFilePath, input).ok).toBe(true);
+  });
+
+  test("body metadata cannot replace missing frontmatter", () => {
+    const input = goodMarkdownNote().replace("title: 本质：Taxi\n", "") + "\ntitle: 本质：Taxi\n";
+    expect(validateNoteText(markdownFilePath, input).ok).toBe(false);
+  });
+});
 
 describe("ValidateNote", () => {
   test("template declares the v2 structure-transfer contract", async () => {

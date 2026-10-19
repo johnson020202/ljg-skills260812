@@ -1,0 +1,3 @@
+# Direct renderer/test dependencies only; transitive packages are not locked here.
+playwright==1.58.0
+Pillow==11.3.0

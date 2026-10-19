@@ -1,104 +1,49 @@
 # Push Workflow
 
-一键同步 ljg-* skills 到 github repo（master + md 双分支）。
+## 1. 明确发布范围
 
-## Voice Notification
+使用本次实际加载的 `{skill_dir}/Tools/Push.sh`。默认仓库 `~/code/ljg-skills260812`，安装源 `~/.agents/skills`，身份 `johnson020202/ljg-skills260812`，source=`master`、generated=`md`。非默认位置显式给 `--repo`、`--local`；单技能用 `--skill ljg-xxx`。唯一兼容名 `fix-ljg-org-to-md` 也可显式选择并参与默认发现；任意其他非 `ljg-*` 名称或路径仍拒绝。
 
-```bash
-curl -s -X POST http://localhost:31337/notify \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Running Push in ljg-push"}' \
-  > /dev/null 2>&1 &
-```
+发布对外发送用户内容，只有用户确实要求发布时才运行正式命令；修复、审计或预览请求只运行隔离测试 / dry-run。
 
-输出文本：`Running **Push** in **ljg-push**...`
-
-## Step 0: Pre-push README check（硬 gate）
-
-每次 push 都要先问自己一句：
-
-> README 还跟实际的 skill 集合对得上吗？
-
-具体三件事：
-
-1. *新增 skill 了吗*？ → README 的 skill 清单 / 安装命令需要加一行
-2. *删了 skill 吗*？ → README 对应行要删
-3. *某个 skill 的描述大改了吗*？ → README 的简介可能要同步
-
-脚本会自动 grep README 里所有 `ljg-xxx` 名字，跟 `~/.agents/skills/ljg-*` 对比。如果有 skill 在 local 但不在 README，*push 直接中止*。
-
-绕过办法（仅当你确认 README 已经审过、不需要更新）：
+## 2. 只读预检
 
 ```bash
-bash Push.sh --skip-readme-check
+bash {skill_dir}/Tools/Push.sh --repo /path/to/repo --dry-run
 ```
 
-## Step 1: 解析参数
+检查显示的 origin、分支 SHA、技能列表、拟变更路径和版本。工作区/index 必须干净，README 已提交且覆盖技能精确名称。根同步范围为 `README.md`、`CLAUDE.md`、`LICENSE`、`.gitignore`、`scripts/**`、`docs/**`、`.github/**`（`ROOT_PATHS`）；只取 source 已提交的普通文件，不扫描工作目录补缺。两份 `.claude-plugin` 元数据仍单独校验。dry-run 不联网、不写文件；不证明远端一致或凭据有效。
 
-| 用户说 | 标志 | 效果 |
-|--------|------|------|
-| 默认 | （无标志）| README check + 检测变更 + 双分支推送 |
-| "dry-run", "看一下" | `--dry-run` | 只列出会做什么，不真推（README check 跳过）|
-| "force", "强推" | `--force` | 跳过 detect，强制 rsync 所有 ljg-* |
-| "README 已审" | `--skip-readme-check` | 跳过 README 一致性 gate（其他 check 仍跑）|
+不要绕过以下拒绝：脏仓库、错误分支、不同 origin、路径/symlink 越界、版本不一致、md 未纳管人工差异。`--force` 不是强推开关；`--skip-readme-check` 仅适用于已人工审查的 README，不处理其他拒绝。
 
-## Step 2: 执行脚本
+## 3. 正式发布
 
 ```bash
-bash ~/.agents/skills/ljg-push/Tools/Push.sh [--dry-run|--force]
+bash {skill_dir}/Tools/Push.sh --repo /path/to/repo
 ```
 
-脚本逻辑：
+执行顺序：
 
-1. *Setup*：检查 `$HOME/code/ljg-skills` 是否存在，不存在则 clone
-2. *Detect*：对比 `~/.agents/skills/ljg-*` vs `repo/skills/ljg-*`，列出有差异的
-3. *Master 推送*：
-   - `git checkout master` + `git pull --rebase`
-   - 对每个有差异的 skill：`rsync -a --delete --exclude='.git'`
-   - bump patch version (plugin.json + marketplace.json)
-   - `git add` + `git commit` + `git push origin master`
-4. *Md 推送*：
-   - `git checkout md` + `git pull --rebase`
-   - 对每个有差异的 skill：rsync + 应用 markdown 化（`mdize_skill` 函数——含 org 文件本体转换：`orgfile_to_md` 转 YAML 头/`#` 标题后删 .org，Markdown 与运行时代码中的实际文件引用全局改写；结构化 `- *标签*：` 转成 `- **标签**：`）
-   - commit 前运行残留审计：拒绝未转换的输出指令、Org 头标记和非 assets `.org` 文件
-   - bump patch version
-   - `git add` + `git commit` + `git push origin md`
-5. *收尾*：切回 `master`，让本地工作 repo 留在源分支
-6. *Report*：列出推送结果 + 仍需手工 review 的差异清单
+1. 完成全部本地预检及 source/Markdown 转换计划。已有 md 对照记录的 source base 检查整个技能树、根白名单和两份元数据；legacy 没有来源时对照当前 source，只有三处一致的旧集合版本可不同，其余人工或历史差异直接拒绝。
+2. `ls-remote` 只读核对两条远端分支；不同基线直接停止，不自动 pull/fetch/rebase。
+3. 在独立临时 Git 仓库构建：只暂存明确文件列表，md 同步已提交根工具的新增/更新/删除及执行模式，结构化写三处一致版本，回读包含根文件的完整管理范围，保留 source→md 来源父链。范围外文件保留目标父树，不从 source 任意复制。
+4. 再次核对用户仓库/源目录未变化，然后完整 refspec + 精确旧 SHA lease 一次 `push --atomic`。不支持原子推送即报错，无两次 push 备选路径。
+5. 删除临时构建目录；原仓库 HEAD、index、工作树不变。成功不创建 tag。
 
-## Step 3: 报告
+## 4. 报告与失败处理
 
-输出格式：
+仅在原子 push 返回成功时报告两个 commit SHA 与集合版本。明确本地仓库未前进，需要操作者显式 fetch/fast-forward 后再发布。只有根范围更新也需生成 md 提交，但不 bump、source SHA 不变；技能和 md 管理范围都无变化时才报告 `Nothing to push`，不要声称生成新版本。
 
-```
-═══ ljg-push 报告 ═══════════════
-更新的 skills:
-  - ljg-qa
-  - ljg-card
+| 拒绝 / 故障 | 处理 |
+|-------------|------|
+| 仓库不存在 | 操作者明确 clone 所需 fork；脚本不会 clone |
+| 工作区/index 脏 | 操作者评审并正常提交/移出，不自动 stash/reset |
+| origin 或分支不符 | 核实真实目标，显式选择路径/分支；不要自动换成“看起来相似”的仓库 |
+| remote/local SHA 不一致 | 操作者检查远端变化并显式更新；脚本不覆盖历史 |
+| md 人工差异或转换器变化 | 按 SKILL.md 的来源契约迁移，保留补丁，不静默删除 |
+| 写入、版本回读、转换或提交验证失败 | 停止；用户工作树没有修改，未发起 push |
+| push 失败 / 不支持 atomic | 停止，无部分发布 fallback；网络中断若状态不明先核对远端 |
 
-master @ v1.17.13 → pushed
-md     @ v1.0.8   → pushed
+## 专项验收
 
-仍需手工 review（自动转换不覆盖的差异）:
-  - ljg-xxx/SKILL.md  (正文 `*bold*` 标记——斜体歧义，脚本不动；结构化 bullet 标签除外)
-
-══════════════════════════════════
-```
-
-## Step 4: 异常处理
-
-| 异常 | 处理 |
-|------|------|
-| repo 路径不存在 | 自动 clone，告知用户 |
-| 路径存在但不是 ljg-skills repo | 报错，不破坏现有目录 |
-| `git push` 被远端拒（远端有新 commit）| 尝试 `pull --rebase`，再推；冲突时报错让用户处理 |
-| `git pull --rebase` 冲突 | 报错，列出冲突文件，提示 `rebase --abort` 或手工解决 |
-| `~/.agents/skills/ljg-*` 没有任何变更 | 输出 "Nothing to push." 退出 |
-
-## 验收
-
-- 两个分支都有新 commit（除非检测到无变更）
-- 远端 origin/master 和 origin/md 都更新
-- 本地 `$HOME/code/ljg-skills` 最后停在 `master`
-- 报告里列出版本号和推送的 skills
-- 任何 markdown 化未覆盖的差异都列在 review checklist 里
+运行 `python3 scripts/test_publish.py`。测试仅在临时 HOME / Git 仓库操作，全部网络传输被 stub 拦截。真实远端权限和服务端 atomic 支持不属于这组离线测试的已验证项。

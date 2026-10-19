@@ -54,7 +54,7 @@
 | `passages` | array | 必填，至少一段 |
 | `passages[].tokens` | array | 必填，按原文顺序排列 |
 | `text` | string | 必填，必须保留底本原字 |
-| `punctuation` | boolean | 标点设为 true；设为 true 时不要求 note |
+| `punctuation` | boolean | true 时 text 必须全为 Unicode 标点（`\p{P}`）或单独 `\n`；禁止 note/pinyin/tone，不能将正文标为标点 |
 | `note` | string | 所有非标点 token 必填 |
 | `tone` | enum | 非标点必填：`word`、`clause`、`variant` |
 | `pinyin` | string | 可选，只用于必要读音 |
@@ -63,7 +63,7 @@
 ## 内容不变量
 
 1. 按 token 顺序拼接 `text`，必须与 `original` 逐字一致。
-2. `punctuation !== true` 的 token 全部有非空 `note` 和合法 `tone`。
+2. `punctuation !== true` 的 token 全部有非空 `note` 和合法 `tone`。每段至少有一个注解 token；覆盖率按实际非标点、非空白正文字符计算，字母、数字、符号等不能伪装成标点。原文换行必须拆为单独 `{"text":"\n","punctuation":true}`。
 3. `interpretation` 不是逐句翻译列表，而是完整章节解读。
 4. JSON 中不放 HTML；渲染器统一转义并控制样式。
 5. `heroImage` 与 `heroAlt` 成对出现；图片在渲染时编码为 data URL，HTML 不保留本地热链。

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1440">
+<title>书名 · 视觉读书笔记</title>
+<style>
+  /* ============================================================
+     Skeleton: keep the structural rules, replace the visual language.
+     Non-negotiable bits are marked KEEP — they exist to stop the
+     layout bugs that poster.py's audit flags.
+
+     HARD RULES (user-mandated, not negotiable):
+       1. Every visible text node is >= 70 CSS px. No exceptions for
+          labels, sources, captions, numbers, units or the export button.
+       2. Mix 5-10 open-source fonts by role (all OFL/CC0/IPA, see
+          scripts/fetch_fonts.sh). Copy the chosen files into this book's
+          own fonts/ directory and keep the @font-face relative URLs below;
+          the renderer serves the folder over local HTTP so the fonts
+          actually load. Never swap in an unlicensed or CDN-hosted font.
+       3. Layout is designed per book — this skeleton shows ONE example,
+          not a template. Read the "per-book layout" note in SKILL.md.
+     ============================================================ */
+  /* Default role map — adjust per book, keep every face local under fonts/. */
+  @font-face{font-family:"LXGW WenKai";src:url("./fonts/LXGWWenKai-Regular.ttf") format("truetype");font-weight:400;font-display:block}
+  @font-face{font-family:"LXGW WenKai Medium";src:url("./fonts/LXGWWenKai-Medium.ttf") format("truetype");font-weight:700;font-display:block}
+  @font-face{font-family:"Smiley Sans Oblique";src:url("./fonts/SmileySans-Oblique.otf") format("opentype");font-style:italic;font-weight:400;font-display:block}
+  @font-face{font-family:"Huiwen Mincho";src:url("./fonts/huiwen-mincho.ttf") format("truetype");font-weight:400;font-display:block}
+  @font-face{font-family:"LXGW Neo XiHei";src:url("./fonts/LXGWNeoXiHei.ttf") format("truetype");font-weight:400;font-display:block}
+  @font-face{font-family:"LXGW Marker Gothic";src:url("./fonts/LXGWMarkerGothic-Regular.ttf") format("truetype");font-weight:400;font-display:block}
+
+  *{box-sizing:border-box;margin:0;padding:0;}
+
+  :root{
+    /* 1 main accent + 1 secondary. No third accent. */
+    --paper:#F2EDE3;
+    --paper-hi:#FBF7EF;
+    --ink:#17181C;
+    --ink-soft:#25272D;
+    --accent:#E24A2A;
+    --accent-lt:#FF6B45;
+    --muted:#6F6A60;          /* must stay >= 4.5:1 on --paper */
+    --line:rgba(23,24,28,.10);
+  }
+
+  html,body{background:var(--paper);}
+  body{
+    /* body role = LXGW WenKai here; swap the stack per book, keep fallbacks */
+    font-family:"LXGW WenKai","PingFang SC","Hiragino Sans GB",
+                "Microsoft YaHei",-apple-system,BlinkMacSystemFont,sans-serif;
+    font-synthesis:none;
+    font-size:70px;
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    /* KEEP: pretty helps CJK wrapping but is not a guarantee; audit T-WIDOW decides. */
+    text-wrap:pretty;
+  }
+
+  /* KEEP: fixed canvas width, side padding so rounded islands never touch the edge.
+     Never set a fixed height — the audit reports BOTTOM-VOID if you do. */
+  #poster{
+    width:1440px;
+    margin:0 auto;
+    padding:44px 40px 72px;
+    background:var(--paper);
+  }
+
+  /* KEEP: vertical rhythm. 64–120px between islands, never 0. */
+  section{margin-bottom:86px;}
+  section:last-of-type{margin-bottom:0;}
+
+  .island{border-radius:68px;padding:64px 72px;}
+  .dark{background:var(--ink);color:var(--paper);}
+
+  .kicker{font-size:70px;line-height:1.45;font-weight:600;letter-spacing:.10em;color:var(--muted);}
+  .dark .kicker{color:rgba(242,237,227,.80);}
+
+  /* ---------- hero ---------- */
+  .hero{
+    display:grid;grid-template-columns:1.06fr .94fr;gap:48px;align-items:center;
+    padding:78px 84px 74px;border-radius:72px;
+  }
+  .book-title{
+    font-size:150px;line-height:1.05;font-weight:700;letter-spacing:.02em;
+    margin:34px 0 28px;
+  }
+  /* KEEP: inline-block keeps an emphasised title word from splitting across lines. */
+  .book-title em{font-style:normal;color:var(--accent-lt);display:inline-block;}
+  .book-en{font-size:70px;line-height:1.45;font-weight:600;letter-spacing:.14em;opacity:.85;}
+  .book-sub{font-size:70px;line-height:1.5;font-weight:500;margin-top:36px;}
+  .book-author{font-size:70px;line-height:1.55;letter-spacing:.04em;margin-top:20px;opacity:.85;}
+
+  /* ---------- hook: one keyword per sentence ---------- */
+  .hook{padding:18px 26px 4px;}
+  .hook-line{font-size:80px;line-height:1.45;font-weight:600;}
+  .hook-line + .hook-line{margin-top:14px;}
+
+  /* KEEP: inline-block + margin so the giant word is never split across lines.
+     audit reports T-KEY-BREAK when the box wraps. */
+  .k{
+    display:inline-block;
+    font-size:150px;line-height:1;font-weight:700;
+    color:var(--accent);letter-spacing:-.02em;
+    vertical-align:-.10em;
+    margin:0 .10em;
+  }
+
+  /* ---------- section head ----------
+     One chapter number per heading: do not add 第 N 章 beside .sec-num.
+     Use an English theme label instead; repeated map/body numbers are allowed. */
+  .sec-head{display:flex;align-items:flex-end;gap:46px;margin-bottom:46px;}
+  .sec-num{font-size:168px;line-height:.76;font-weight:700;letter-spacing:-.05em;color:var(--accent);}
+  .sec-title{font-size:80px;font-weight:700;line-height:1.15;letter-spacing:.01em;}
+
+  .main{font-size:70px;line-height:1.6;font-weight:500;max-width:1200px;}
+
+  /* KEEP: a number and its unit must stay on one line.
+     audit reports T-UNIT-WRAP otherwise. */
+  .nowrap{white-space:nowrap;}
+  .unit{font-size:max(70px,.42em);font-weight:700;margin-left:.12em;}
+  .ref,.source{font-size:70px;line-height:1.55;margin-top:32px;}
+
+  /* ---------- cards ---------- */
+  .card{border-radius:32px;padding:34px 38px;}
+  .card + .card{margin-top:24px;}
+  .card h3{font-size:70px;font-weight:700;margin-bottom:12px;}
+  .card p{font-size:70px;line-height:1.55;color:var(--muted);}
+
+  /* ---------- checklist ---------- */
+  .check{padding:70px 84px 76px;}
+  .check ol{list-style:none;counter-reset:c;}
+  .check li{
+    counter-increment:c;display:grid;grid-template-columns:100px 1fr;gap:26px;
+    padding:30px 0;border-bottom:1px solid rgba(242,237,227,.14);
+  }
+  .check li:last-child{border-bottom:0;}
+  .check li::before{
+    content:counter(c,decimal-leading-zero);
+    font-size:70px;font-weight:700;color:var(--accent-lt);
+  }
+  .check h3{font-size:70px;font-weight:700;margin-bottom:10px;}
+  .check p{font-size:70px;line-height:1.5;opacity:.88;}
+
+  /* Real visible roles, not only @font-face declarations. */
+  .sec-title,.card h3,.check h3{font-family:"LXGW WenKai Medium",sans-serif;font-weight:700;}
+  .book-title,.sec-num{font-family:"Smiley Sans Oblique",sans-serif;font-style:italic;font-weight:400;}
+  .book-title em{font-style:inherit;}
+  .kicker,.book-en{font-family:"LXGW Neo XiHei",sans-serif;font-weight:400;}
+  .k{font-family:"LXGW Marker Gothic",sans-serif;font-weight:400;}
+  /* Huiwen candidates 让药继赞钟钥认讲论证铁 need 120px-grid visual review.
+     audit lists candidates, not proven glyph shapes; never auto-rewrite quotations. */
+  .quote-pull,.ending{font-family:"Huiwen Mincho",serif;font-weight:400;}
+
+  /* ---------- optional scene pieces (use what the book needs, delete the rest) ---------- */
+  .chapter-map{display:grid;gap:22px;margin:36px 0;}
+  .chapter-map .row{display:grid;grid-template-columns:140px 1fr;gap:28px;align-items:start;
+    padding:26px 30px;border-radius:34px;background:var(--paper-hi);}
+  .dark .chapter-map .row{background:#2b2c33;}
+  .chapter-map .row .no{font-size:70px;font-weight:700;color:var(--accent);line-height:1.2;}
+  .chapter-map .row h3{font-size:70px;font-weight:700;line-height:1.35;}
+  .chapter-map .row p{font-size:70px;line-height:1.5;margin-top:10px;color:var(--muted);}
+  .dark .chapter-map .row p{color:rgba(242,237,227,.85);}
+  .chapter-map .row .more{font-size:70px;line-height:1.4;margin-top:12px;font-weight:600;}
+
+  .quote-pull{font-size:80px;line-height:1.5;font-weight:600;padding:34px 38px;
+    border-left:10px solid var(--accent);border-radius:0 34px 34px 0;background:var(--paper-hi);}
+  .quote-pull .who{display:block;font-size:70px;line-height:1.5;margin-top:20px;font-weight:500;opacity:.85;}
+
+  .contrast{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:36px 0;}
+  .contrast .cell{border-radius:34px;padding:32px 36px;}
+  .contrast .cell h3{font-size:70px;font-weight:700;margin-bottom:14px;}
+  .contrast .cell p{font-size:70px;line-height:1.5;}
+  .contrast .word{font-size:110px;line-height:1.2;font-weight:700;display:inline-block;margin:8px 0 14px;}
+
+  .timeline{display:grid;gap:26px;margin:36px 0;}
+  .timeline .stop{display:grid;grid-template-columns:150px 1fr;gap:28px;align-items:start;}
+  .timeline .stop .when{font-size:70px;font-weight:700;line-height:1.3;color:var(--accent);}
+  .timeline .stop p{font-size:70px;line-height:1.5;}
+  .timeline .stop h3{font-size:70px;font-weight:700;margin-bottom:8px;}
+
+  .diagram-note{font-size:70px;line-height:1.5;margin-top:22px;color:var(--muted);}
+  .dark .diagram-note{color:rgba(242,237,227,.85);}
+
+  /* KEEP: export button must be static, not fixed —
+     a fixed element gets repeated or mispositioned in full-page capture. */
+  .tools{
+    position:static;
+    display:flex;justify-content:center;
+    padding:28px 0 0;
+  }
+  .tools button{
+    font:600 70px/1.4 "Huiwen Mincho","PingFang SC",sans-serif;
+    padding:20px 38px;border:0;border-radius:999px;
+    background:var(--ink);color:var(--paper);cursor:pointer;
+  }
+</style>
+</head>
+<body>
+<main id="poster">
+
+  <!-- 01 HERO: title + one hook + one abstract visual -->
+  <section class="hero island dark">
+    <div>
+      <div class="kicker">VISUAL BOOK NOTE</div>
+      <!-- Keep title <= 4 chars at 150px, or lower .book-title to 120px. -->
+      <h1 class="book-title">书名<em>真相</em></h1>
+      <div class="book-en">ENGLISH TITLE</div>
+      <div class="book-sub">一句能概括全书判断的话，</div>
+      <div class="book-author">作者</div>
+    </div>
+    <div aria-hidden="true"><!-- CSS/SVG motif only, no text --></div>
+  </section>
+
+  <!-- 02 HOOK: one sentence, one giant word -->
+  <section class="hook">
+    <div class="hook-line">你不是不够努力，</div>
+    <div class="hook-line">你只是<span class="k">带宽</span>被占满了，</div>
+  </section>
+
+  <!-- 03..0N CORE POINTS: vary the scene type each time -->
+  <section class="island dark sec-01">
+    <div class="sec-head">
+      <div class="sec-num">01</div>
+      <div>
+        <div class="kicker">核心判断</div>
+        <h2 class="sec-title">标题</h2>
+      </div>
+    </div>
+    <div class="main">主句，只有一个词放大，</div>
+  </section>
+
+  <section class="sec-02">
+    <div class="sec-head">
+      <div class="sec-num">02</div>
+      <div>
+        <div class="kicker">数据 / 结构</div>
+        <h2 class="sec-title">标题</h2>
+      </div>
+    </div>
+    <div class="main">
+      经原书核对的数据
+      <span class="nowrap"><span class="k">数值</span><span class="unit">单位</span></span>
+    </div>
+  </section>
+
+  <!-- LAST: checklist + closing -->
+  <section class="island dark checklist check">
+    <div class="sec-head">
+      <div class="sec-num">05</div>
+      <div><div class="kicker">ACTION LIST</div><h2 class="sec-title">带走这几条</h2></div>
+    </div>
+    <ol>
+      <li><div><h3>行动一</h3><p>一句可执行的说明，</p></div></li>
+      <li><div><h3>行动二</h3><p>一句可执行的说明，</p></div></li>
+    </ol>
+  </section>
+
+  <section class="ending">
+    <div class="main">结尾收束，回到一个可以带走的判断，</div>
+  </section>
+
+  <div class="tools" data-export-ignore>
+    <button onclick="exportPNG()">导出 PNG</button>
+  </div>
+
+</main>
+
+<script>
+// Optional manual export only. Automated rendering stays entirely offline.
+async function exportPNG() {
+  if (!window.html2canvas) {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('Manual export library failed to load'));
+      document.head.appendChild(script);
+    });
+  }
+  const tools = document.querySelector('[data-export-ignore]');
+  if (tools) tools.style.display = 'none';
+  try {
+    const node = document.getElementById('poster');
+    const canvas = await html2canvas(node, {
+      scale: 0.75, // output sampling only; CSS width/font floor stay 1440/70
+      useCORS: true,
+      backgroundColor: getComputedStyle(node).backgroundColor,
+      logging: false,
+      windowWidth: node.scrollWidth,
+      windowHeight: node.scrollHeight
+    });
+    const a = document.createElement('a');
+    a.download = 'book-note.png';
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  } finally {
+    if (tools) tools.style.display = '';
+  }
+}
+</script>
+</body>
+</html>

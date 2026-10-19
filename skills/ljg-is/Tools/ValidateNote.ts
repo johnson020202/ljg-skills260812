@@ -31,10 +31,36 @@ const GENERIC_CORES = new Set([
   "满足需求",
 ]);
 
-function metadataValue(content: string, key: string, format: NoteFormat): string | undefined {
-  const prefix = format === "org" ? "#\\+" : "";
-  const match = content.match(new RegExp(`^${prefix}${key}:\\s*(.+?)\\s*$`, "mi"));
-  return match?.[1]?.trim();
+const PLACEHOLDER_PATTERN = /\b(?:TODO|TBD)\b|待补|占位|\{[^}\n]+\}/iu;
+
+function hasMetadataPlaceholder(value: unknown, seen = new Set<object>()): boolean {
+  if (typeof value === "string") return PLACEHOLDER_PATTERN.test(value);
+  if (!value || typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  return Object.values(value).some((entry) => hasMetadataPlaceholder(entry, seen));
+}
+
+function markdownFrontmatter(content: string, errors: string[]): { metadata: Record<string, unknown>; body: string } {
+  const lines = content.split("\n");
+  if (!/^---[ \t]*$/.test(lines[0])) {
+    errors.push("Markdown 必须以 YAML frontmatter 的 --- 分隔符开始");
+    return { metadata: {}, body: content };
+  }
+  const end = lines.findIndex((line, index) => index > 0 && /^(?:---|\.\.\.)[ \t]*$/.test(line));
+  if (end < 0) {
+    errors.push("YAML frontmatter 缺少结束分隔符 --- 或 ...");
+    return { metadata: {}, body: "" };
+  }
+  const body = lines.slice(end + 1).join("\n");
+  try {
+    if (typeof Bun.YAML?.parse !== "function") throw new Error("需要支持 Bun.YAML.parse 的 Bun（已验证 1.3.14）");
+    const value = Bun.YAML.parse(lines.slice(1, end).join("\n"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("元数据必须是映射");
+    return { metadata: Object.fromEntries(Object.entries(value).map(([key, val]) => [key.toLowerCase(), val])), body };
+  } catch (error) {
+    errors.push(`YAML frontmatter 无效：${error instanceof Error ? error.message : String(error)}`);
+    return { metadata: {}, body };
+  }
 }
 
 function sectionBody(content: string, heading: string, format: NoteFormat): string | undefined {
@@ -97,6 +123,7 @@ function hasExactLabels(entries: EmphasizedBullet[], labels: string[]): boolean 
 }
 
 export function validateNoteText(filePath: string, content: string): ValidationResult {
+  content = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
   const errors: string[] = [];
   const fileName = basename(filePath);
   const extensionMatch = fileName.match(/\.(org|md)$/u);
@@ -110,20 +137,25 @@ export function validateNoteText(filePath: string, content: string): ValidationR
   }
 
   const effectiveFormat = format ?? "org";
-  const title = metadataValue(content, "title", effectiveFormat);
-  const date = metadataValue(content, "date", effectiveFormat);
-  const identifier = metadataValue(content, "identifier", effectiveFormat);
-  const filetags = metadataValue(
-    content,
-    effectiveFormat === "org" ? "filetags" : "tags",
-    effectiveFormat,
-  );
-  const declaredSchema = metadataValue(content, "schema", effectiveFormat);
+  const parsed = effectiveFormat === "md" ? markdownFrontmatter(content, errors) : undefined;
+  const metadataValue = (key: string): unknown => parsed
+    ? parsed.metadata[key]
+    : content.match(new RegExp(`^#\\+${key}:[ \\t]*([^\\n]*)$`, "mi"))?.[1]?.trim();
+  const scalar = (value: unknown): string | undefined => typeof value === "string" ? value.trim() : undefined;
+  const title = scalar(metadataValue("title"));
+  const date = scalar(metadataValue("date"));
+  const identifier = scalar(metadataValue("identifier"));
+  const filetags = metadataValue(effectiveFormat === "org" ? "filetags" : "tags");
+  const rawSchema = metadataValue("schema");
+  const declaredSchema = scalar(rawSchema);
+  // Absence means legacy; a present but empty/non-scalar declaration is not legacy.
+  const schemaPresent = parsed ? Object.hasOwn(parsed.metadata, "schema") : rawSchema !== undefined;
+  if (parsed) content = parsed.body;
   const isV2 = declaredSchema === V2_SCHEMA;
   const schema = isV2 ? V2_SCHEMA : "legacy";
   const metadataPrefix = effectiveFormat === "org" ? "#+" : "";
 
-  if (declaredSchema && !isV2) {
+  if (schemaPresent && !isV2) {
     errors.push(`${metadataPrefix}schema 只支持 ${V2_SCHEMA}；无 schema 的历史笔记按 legacy 校验`);
   }
 
@@ -139,7 +171,10 @@ export function validateNoteText(filePath: string, content: string): ValidationR
   if (fileMatch && identifier && identifier !== fileMatch[1]) {
     errors.push(`${metadataPrefix}identifier 必须与文件名时间戳一致`);
   }
-  const tags = filetags?.replace(/[\[\],:]/gu, " ").split(/\s+/u).filter(Boolean) ?? [];
+  const tags = typeof filetags === "string"
+    ? filetags.replace(/[\[\],:]/gu, " ").split(/\s+/u).filter(Boolean)
+    : Array.isArray(filetags) && filetags.every((tag) => typeof tag === "string" && tag.trim())
+      ? filetags.map((tag: string) => tag.trim()) : [];
   if (!tags.includes("is")) {
     errors.push(`${metadataPrefix}${effectiveFormat === "org" ? "filetags" : "tags"} 必须包含 is`);
   }
@@ -163,7 +198,7 @@ export function validateNoteText(filePath: string, content: string): ValidationR
   } else if (/^#\+/mu.test(content) || /^\* (?:问题|完整表达|剥离|本质|示例|验证)\s*$/mu.test(content)) {
     errors.push("Markdown 文件中不能出现 Org 元数据或 Org 一级标题");
   }
-  if (/\b(?:TODO|TBD)\b|待补|占位|\{[^}\n]+\}/iu.test(content)) {
+  if (PLACEHOLDER_PATTERN.test(content) || (parsed && hasMetadataPlaceholder(parsed.metadata))) {
     errors.push("文件中不能残留 TODO、TBD 或模板占位符");
   }
   if (/^问题类型：/mu.test(content)) {

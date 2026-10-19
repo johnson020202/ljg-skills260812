@@ -1,13 +1,13 @@
 ---
-title: {一句中文判断，写出读者能带走什么}
-subtitle: {论文原始标题；必要时先加一句中文解释}
-description: {正文写完后再写；用一两句话说清为什么需要这篇、作者多看见了什么、以后怎样判断}
-date: [{YYYY-MM-DD Day HH:MM}]
-tags: paper
-identifier: {YYYYMMDDTHHMMSS}
-source: {唯一原始 URL，只写裸 URL，不加描述}
-authors: {作者列表}
-venue: {发表场所/年份}
+title: "{一句中文判断，写出读者能带走什么}"
+subtitle: "{论文原始标题；必要时先加一句中文解释}"
+description: "{正文写完后再写；用一两句话说清为什么需要这篇、作者多看见了什么、以后怎样判断}"
+date: "{YYYY-MM-DD Day HH:MM}"
+tags: ["paper"]
+identifier: "{YYYYMMDDTHHMMSS}"
+source: "{唯一原始 URL，只写裸 URL，不加描述}"
+authors: "{作者列表}"
+venue: "{发表场所/年份}"
 ---
 
 {所有花括号都是写作提示，成文时必须全部删除。下面三段只是常见起步；可随真实转折合并或拆分。可见标题只能来自论文里的事件、变化或条件。}

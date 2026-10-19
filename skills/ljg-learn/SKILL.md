@@ -1,13 +1,13 @@
 ---
 name: ljg-learn
-description: Deep concept anatomist that deconstructs any concept through 8 exploration dimensions (history, dialectics, phenomenology, linguistics, formalization, existentialism, aesthetics, meta-philosophy) and compresses insights into an epiphany. Use when user asks to explain, dissect, or deeply understand a concept, term, or idea. Triggers on '解剖概念', '概念解剖', 'explain concept', 'learn concept', '/ljg-learn'. Produces markdown output.
+description: Deep concept anatomist that deconstructs any concept through 8 exploration dimensions (history, dialectics, phenomenology, linguistics, formalization, existentialism, aesthetics, meta-philosophy) and compresses insights into an epiphany. Use when user asks to explain, dissect, or deeply understand a concept, term, or idea. Triggers on '解剖概念', '概念解剖', 'explain concept', 'learn concept', '/ljg-learn'. Produces Markdown output.
 ---
 
 ## Usage
 
 <example>
 User: /ljg-learn 熵
-Assistant: [对"熵"进行八维解剖，生成 markdown 报告]
+Assistant: [对"熵"进行八维解剖，生成 Markdown 报告]
 </example>
 
 ## Instructions
@@ -46,31 +46,33 @@ Assistant: [对"熵"进行八维解剖，生成 markdown 报告]
 ### 5. 写入
 
 **格式规则（零例外）：**
-- 输出必须是纯 markdown 语法，禁止任何 markdown 语法
-- 加粗用 `*bold*`（markdown），不用 `**bold**`（markdown）
-- 分隔线用空行或 org 标题层级区分，不用 `---`（markdown 分隔符）
-- 列表用 `- item` 或 `1. item`，不用 markdown 的 `* item`（因为 `*` 在 org 中是标题）
-- 代码用 `~code~` 或 `=code=`，不用反引号
+- 输出必须是纯 Markdown 语法，不混用 Org 语法
+- 加粗用 `**bold**`（Markdown）
+- 分隔用空行或 Markdown 标题层级；分隔线可用 `---`
+- 列表用 `- item` 或 `1. item`
+- 行内代码用反引号，代码块用围栏
 
-整合为 markdown，结构：
+整合为 Markdown，结构：
 
-```yaml
-title: 概念解剖：{概念名}
-tags: :concept:
-date: [YYYY-MM-DD]
+```markdown
+---
+title: "概念解剖：{概念名}"
+tags: ["concept"]
+date: "YYYY-MM-DD"
+---
 
-* 定锚
-* 八刀
-** 历史
-** 辩证
-** 现象
-** 语言
-** 形式
-** 存在
-** 美感
-** 元反思
-* 内观
-* 压缩
+# 定锚
+# 八刀
+## 历史
+## 辩证
+## 现象
+## 语言
+## 形式
+## 存在
+## 美感
+## 元反思
+# 内观
+# 压缩
 ```
 
 写入文件：

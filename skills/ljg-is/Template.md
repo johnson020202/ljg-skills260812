@@ -1,8 +1,8 @@
 ---
-title: 本质：{目标}
-date: [{可读时间}]
-identifier: {时间戳}
-tags: is
+title: "本质：{目标}"
+date: "{可读时间}"
+identifier: "{时间戳}"
+tags: ["is"]
 schema: ljg-is-v2
 ---
 
